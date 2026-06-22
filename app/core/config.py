@@ -56,13 +56,19 @@ class Config:
     NEWS_API_KEY: Optional[str] = os.getenv("NEWS_API_KEY")
 
     # Data Provider Configuration
-    DATA_PROVIDER: str = os.getenv("DATA_PROVIDER", "mock")  # "mock", "alphavantage", etc.
+    DATA_PROVIDER: str = os.getenv("DATA_PROVIDER", "mock")  # "mock", "alphavantage", "yfinance", etc.
     ALPHAVANTAGE_RATE_LIMIT_CALLS_PER_MINUTE: int = int(
         os.getenv("ALPHAVANTAGE_RATE_LIMIT_CALLS_PER_MINUTE", "5")
     )
     ALPHAVANTAGE_CACHE_TTL_SECONDS: int = int(
         os.getenv("ALPHAVANTAGE_CACHE_TTL_SECONDS", "300")
     )
+    
+    # yfinance Configuration
+    YFINANCE_ENABLED: bool = os.getenv("YFINANCE_ENABLED", "True").lower() == "true"
+    # Disable yfinance in production by default (can be overridden)
+    if ENVIRONMENT == Environment.PROD:
+        YFINANCE_ENABLED = os.getenv("YFINANCE_ENABLED", "False").lower() == "true"
 
     # Paper Trading
     PAPER_TRADING_ENABLED: bool = os.getenv("PAPER_TRADING_ENABLED", "True").lower() == "true"
