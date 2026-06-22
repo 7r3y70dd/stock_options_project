@@ -20,6 +20,91 @@ Options Tracker allows users to:
 
 **Live trading is disabled by default.** Users must explicitly enable live trading after understanding the risks and completing paper trading validation.
 
+## MVP User Flow
+
+The MVP defines a complete user journey from authentication through paper trade execution and position tracking. This flow ensures every screen has a defined purpose and no real-money trading occurs.
+
+### Flow Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ SCREEN 1: LOGIN                                                 │
+│ Purpose: Authenticate user and establish session                │
+│ User Action: Enter credentials                                  │
+└────────────────────┬────────────────────────────────────────────┘
+                     │
+                     ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ SCREEN 2: WATCHLIST SELECTION                                   │
+│ Purpose: User selects which stocks to analyze                   │
+│ User Action: Choose from saved watchlist or add new symbols     │
+└────────────────────┬────────────────────────────────────────────┘
+                     │
+                     ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ SCREEN 3: RISK LEVEL SELECTION                                  │
+│ Purpose: User defines risk tolerance for scoring algorithm      │
+│ User Action: Select Low, Medium, or High risk profile           │
+└────────────────────┬────────────────────────────────────────────┘
+                     │
+                     ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ SCREEN 4: DATA FETCH & RANKING                                  │
+│ Purpose: App fetches market/options/news data and ranks         │
+│          opportunities by risk-scored signals                   │
+│ User Action: Wait for data load; view ranked opportunities      │
+└────────────────────┬────────────────────────────────────────────┘
+                     │
+                     ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ SCREEN 5: SIGNAL REVIEW & EXPLANATION                           │
+│ Purpose: User reviews top-ranked opportunity with full          │
+│          breakdown of score factors and estimated downside      │
+│ User Action: Review explanation; approve or reject trade        │
+└────────────────────┬────────────────────────────────────────────┘
+                     │
+                     ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ SCREEN 6: PAPER TRADE APPROVAL                                  │
+│ Purpose: Confirm paper trade execution (no real money)          │
+│ User Action: Approve paper trade entry                          │
+└────────────────────┬────────────────────────────────────────────┘
+                     │
+                     ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ SCREEN 7: POSITION TRACKING                                     │
+│ Purpose: Monitor open paper trade position in real-time         │
+│ User Action: View P&L, Greeks, and position details             │
+└────────────────────┬────────────────────────────────────────────┘
+                     │
+                     ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ SCREEN 8: EXIT RECOMMENDATION                                   │
+│ Purpose: App generates exit signal based on price/Greeks/time   │
+│ User Action: Review exit recommendation; close paper trade      │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Screen Definitions
+
+| Screen | Purpose | User Input | App Output |
+|--------|---------|-----------|------------|
+| 1. Login | Authenticate user and establish session | Email/password | Session token; redirect to watchlist |
+| 2. Watchlist Selection | User selects which stocks to analyze | Choose symbols from saved list or add new | Selected watchlist symbols |
+| 3. Risk Level Selection | User defines risk tolerance for scoring | Select Low / Medium / High | Risk profile stored for scoring |
+| 4. Data Fetch & Ranking | App fetches market/options/news; ranks opportunities | None (automatic) | Ranked list of top 5–10 opportunities |
+| 5. Signal Review & Explanation | User reviews top opportunity with full breakdown | Approve or reject | Score breakdown, estimated downside, Greeks |
+| 6. Paper Trade Approval | Confirm paper trade execution (no real money) | Approve paper trade | Paper trade created; position opened |
+| 7. Position Tracking | Monitor open paper trade in real-time | None (view-only) | Live P&L, Greeks, bid/ask, time decay |
+| 8. Exit Recommendation | App generates exit signal; user closes trade | Close position | Exit recommendation reason; trade closed |
+
+### Key Constraints
+
+- **No Real-Money Trading**: All trades in MVP are paper trades only. Live trading is disabled by default.
+- **Every Screen Has Purpose**: Each screen advances the user toward a complete trade cycle (entry → monitoring → exit).
+- **Explainability**: Screens 5 and 8 show reasoning (score breakdown, exit rationale) so users understand why the app recommends each action.
+- **Risk Awareness**: Screen 3 and Screen 5 emphasize risk level and estimated downside before any trade is approved.
+
 ## Risk Levels
 
 The app supports three risk profiles. Each profile scores opportunities by expected return, probability estimate, liquidity, volatility, and news sentiment:
