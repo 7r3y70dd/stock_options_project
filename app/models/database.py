@@ -176,6 +176,7 @@ class Signal(Base):
     # Relationships
     user = relationship("User", back_populates="signals")
     option_contract = relationship("OptionContract", back_populates="signals")
+    trades = relationship("Trade", back_populates="signal")
 
     # Composite index for efficient querying by user and status
     __table_args__ = (
@@ -184,28 +185,40 @@ class Signal(Base):
 
 
 class Trade(Base):
-    """Trade execution model."""
+    """Trade execution model for tracking paper and live trades.
+    
+    Stores trade execution details including entry/exit prices, P/L calculations,
+    and links to signals and broker orders. Every trade is linked to a signal,
+    and P/L can be calculated after the trade is closed.
+    """
 
     __tablename__ = "trades"
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    signal_id = Column(Integer, ForeignKey("signals.id"), nullable=False, index=True)  # Every order is linked to a signal
     option_contract_id = Column(Integer, ForeignKey("option_contracts.id"), nullable=False, index=True)
-    trade_type = Column(String(10), nullable=False)  # buy or sell
-    quantity = Column(Integer, nullable=False)
-    entry_price = Column(Float, nullable=False)
-    exit_price = Column(Float, nullable=True)
-    status = Column(String(50), default="open", nullable=False)  # open, closed, cancelled
-    is_paper_trading = Column(Boolean, default=True, nullable=False)
-    pnl = Column(Float, nullable=True)  # Profit/loss
-    pnl_pct = Column(Float, nullable=True)  # Profit/loss percentage
+    broker_order_id = Column(String(255), nullable=True, index=True)  # Broker's order ID for tracking
+    status = Column(String(50), default="open", nullable=False, index=True)  # open, closed, cancelled
+    entry_price = Column(Float, nullable=False)  # Entry price per contract
+    exit_price = Column(Float, nullable=True)  # Exit price per contract (null if still open)
+    quantity = Column(Integer, nullable=False)  # Number of contracts
+    realized_pnl = Column(Float, nullable=True)  # Realized P/L (null if still open)
+    is_paper_trading = Column(Boolean, default=True, nullable=False)  # True for paper, False for live
+    opened_at = Column(DateTime, default=datetime.utcnow, nullable=False)  # When trade was opened
+    closed_at = Column(DateTime, nullable=True)  # When trade was closed (null if still open)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    closed_at = Column(DateTime, nullable=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
     # Relationships
     user = relationship("User", back_populates="trades")
+    signal = relationship("Signal", back_populates="trades")
     option_contract = relationship("OptionContract", back_populates="trades")
+
+    # Composite index for efficient querying by user and status
+    __table_args__ = (
+        Index('ix_trades_user_status', 'user_id', 'status'),
+    )
 
 
 class BacktestResult(Base):
