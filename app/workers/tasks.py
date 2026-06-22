@@ -7,6 +7,8 @@ from typing import Optional
 from app.core.celery import celery_app
 from app.core.config import config
 from app.core.database import SessionLocal
+from app.core.broker_provider import BrokerProvider
+from app.core.paper_broker_provider import PaperBrokerProvider
 from app.data_sources import (
     DataProvider,
     MockDataProvider,
@@ -20,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 # Initialize default data provider (mock for now, can be swapped)
 _data_provider: Optional[DataProvider] = None
+_broker_provider: Optional[BrokerProvider] = None
 
 
 def get_data_provider() -> DataProvider:
@@ -86,6 +89,44 @@ def set_data_provider(provider: DataProvider) -> None:
     global _data_provider
     _data_provider = provider
     logger.info(f"Data provider set to {provider.__class__.__name__}")
+
+
+def get_broker_provider() -> BrokerProvider:
+    """Get or initialize the broker provider based on configuration.
+    
+    Returns:
+        BrokerProvider instance
+    """
+    global _broker_provider
+    if _broker_provider is None:
+        provider_name = config.BROKER_PROVIDER.lower()
+        
+        if provider_name == "paper":
+            _broker_provider = PaperBrokerProvider(
+                initial_cash=config.BROKER_PAPER_INITIAL_CASH,
+                enable_logging=config.BROKER_ENABLE_LOGGING,
+            )
+            logger.info("Initialized PaperBrokerProvider for background tasks")
+        else:
+            # Default to paper broker
+            _broker_provider = PaperBrokerProvider(
+                initial_cash=config.BROKER_PAPER_INITIAL_CASH,
+                enable_logging=config.BROKER_ENABLE_LOGGING,
+            )
+            logger.info("Initialized PaperBrokerProvider (default) for background tasks")
+    
+    return _broker_provider
+
+
+def set_broker_provider(provider: BrokerProvider) -> None:
+    """Set the broker provider for background tasks.
+    
+    Args:
+        provider: BrokerProvider instance to use
+    """
+    global _broker_provider
+    _broker_provider = provider
+    logger.info(f"Broker provider set to {provider.__class__.__name__}")
 
 
 @celery_app.task(
@@ -314,8 +355,6 @@ def monitor_trades(self, user_id: Optional[int] = None) -> dict:
                 "user_id": user_id,
                 "timestamp": datetime.utcnow().isoformat(),
                 "trades_monitored": 0,
-                "trades_closed": 0,
-                "provider": provider.__class__.__name__,
             }
             logger.info(f"Trade monitoring completed: {result}")
             return result
@@ -325,17 +364,53 @@ def monitor_trades(self, user_id: Optional[int] = None) -> dict:
     except Exception as exc:
         logger.error(f"Trade monitoring failed: {exc}", exc_info=True)
         # Retry with exponential backoff
-        raise self.retry(exc=exc, countdown=30 * (2 ** self.request.retries))
+        raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
 
 
-@celery_app.task(name="app.workers.tasks.health_check")
-def health_check() -> dict:
-    """Health check task to verify Celery worker is running.
+@celery_app.task(
+    name="app.workers.tasks.monitor_broker_positions",
+    bind=True,
+    max_retries=3,
+    default_retry_delay=60,
+)
+def monitor_broker_positions(self, user_id: Optional[int] = None) -> dict:
+    """Monitor broker positions and account status.
     
+    Args:
+        user_id: Optional specific user's positions to monitor. If None, monitor all.
+        
     Returns:
-        Dictionary with health check status
+        Dictionary with position monitoring results
     """
-    return {
-        "status": "healthy",
-        "timestamp": datetime.utcnow().isoformat(),
-    }
+    try:
+        logger.info(f"Starting broker position monitoring for user_id={user_id}")
+        
+        broker = get_broker_provider()
+        
+        try:
+            # Get current account status
+            account = broker.get_account()
+            positions = broker.get_positions()
+            orders = broker.get_orders()
+            
+            result = {
+                "status": "success",
+                "user_id": user_id,
+                "timestamp": datetime.utcnow().isoformat(),
+                "account_id": account.account_id,
+                "account_type": account.account_type,
+                "portfolio_value": account.portfolio_value,
+                "cash": account.cash,
+                "positions_count": len(positions),
+                "orders_count": len(orders),
+                "broker": broker.__class__.__name__,
+            }
+            logger.info(f"Broker position monitoring completed: {result}")
+            return result
+        finally:
+            pass
+            
+    except Exception as exc:
+        logger.error(f"Broker position monitoring failed: {exc}", exc_info=True)
+        # Retry with exponential backoff
+        raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
