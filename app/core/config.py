@@ -80,10 +80,21 @@ class Config:
         os.getenv("FINNHUB_CACHE_TTL_SECONDS", "300")
     )
 
-    # Paper Trading
+    # Paper Trading & Broker Configuration
     PAPER_TRADING_ENABLED: bool = os.getenv("PAPER_TRADING_ENABLED", "True").lower() == "true"
     LIVE_TRADING_ENABLED: bool = os.getenv("LIVE_TRADING_ENABLED", "False").lower() == "true"
     INITIAL_PORTFOLIO_VALUE: float = float(os.getenv("INITIAL_PORTFOLIO_VALUE", "100000"))
+    
+    # Broker Provider Configuration
+    BROKER_PROVIDER: str = os.getenv("BROKER_PROVIDER", "paper")  # "paper", "alpaca", "tradier", etc.
+    BROKER_PAPER_INITIAL_CASH: float = float(os.getenv("BROKER_PAPER_INITIAL_CASH", "100000"))
+    BROKER_ENABLE_LOGGING: bool = os.getenv("BROKER_ENABLE_LOGGING", "True").lower() == "true"
+    
+    # Live Trading Safeguards
+    # In production, live trading is disabled by default and requires explicit user approval
+    if ENVIRONMENT == Environment.PROD:
+        LIVE_TRADING_ENABLED = os.getenv("LIVE_TRADING_ENABLED", "False").lower() == "true"
+        PAPER_TRADING_ENABLED = os.getenv("PAPER_TRADING_ENABLED", "True").lower() == "true"
 
     # Risk Management
     DEFAULT_RISK_LEVEL: str = os.getenv("DEFAULT_RISK_LEVEL", "medium")
@@ -112,6 +123,24 @@ class Config:
     def is_prod(cls) -> bool:
         """Check if running in production mode."""
         return cls.ENVIRONMENT == Environment.PROD
+
+    @classmethod
+    def is_live_trading_enabled(cls) -> bool:
+        """Check if live trading is enabled.
+        
+        Returns:
+            True only if both LIVE_TRADING_ENABLED is True and PAPER_TRADING_ENABLED is False
+        """
+        return cls.LIVE_TRADING_ENABLED and not cls.PAPER_TRADING_ENABLED
+
+    @classmethod
+    def is_paper_trading_enabled(cls) -> bool:
+        """Check if paper trading is enabled.
+        
+        Returns:
+            True if PAPER_TRADING_ENABLED is True
+        """
+        return cls.PAPER_TRADING_ENABLED
 
 
 # Export singleton config instance
