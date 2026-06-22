@@ -2,7 +2,7 @@
 
 A stock options research and paper-trading application that helps users find, score, and track options opportunities based on their selected risk level.
 
-This app does **not** promise guaranteed profits or “sure bets.” Options trading is risky, and all signals should be treated as research ideas, not financial advice.
+⚠️ **IMPORTANT DISCLAIMER**: This app does **not** promise guaranteed profits or "sure bets." Options trading is inherently risky. All signals and recommendations should be treated as research ideas for educational purposes only, not as financial advice. Past performance does not guarantee future results. Users must understand the risks of options trading, including the potential loss of the entire investment. Always paper trade first before considering any live trading.
 
 ## Overview
 
@@ -12,15 +12,17 @@ Options Tracker allows users to:
 - Fetch stock price and options-chain data
 - Pull relevant stock news
 - Analyze options opportunities
-- Score trades based on risk, liquidity, volatility, and news sentiment
+- Score risk-scored opportunities based on risk, liquidity, volatility, and news sentiment
 - Choose a risk level: low, medium, or high
+- **Paper trade first** to test strategies without risking real money
 - Backtest strategies
-- Paper trade before considering live execution
 - Track open and closed trades
+
+**Live trading is disabled by default.** Users must explicitly enable live trading after understanding the risks and completing paper trading validation.
 
 ## Risk Levels
 
-The app supports three risk profiles:
+The app supports three risk profiles. Each profile scores opportunities by expected return, probability estimate, liquidity, volatility, and news sentiment:
 
 ### Low Risk
 
@@ -32,6 +34,8 @@ Focuses on defined-risk or asset-backed strategies such as:
 - Higher-liquidity contracts
 - Lower max loss per trade
 
+**Estimated Downside**: Max loss is capped by the strategy structure (e.g., premium received for covered calls).
+
 ### Medium Risk
 
 Allows more directional exposure and moderate risk, such as:
@@ -41,6 +45,8 @@ Allows more directional exposure and moderate risk, such as:
 - Earnings-aware trades
 - Moderate expiration windows
 - Medium position sizing
+
+**Estimated Downside**: Max loss is defined by the spread width or debit paid; users should size positions accordingly.
 
 ### High Risk
 
@@ -52,7 +58,7 @@ Allows more aggressive trades, such as:
 - Higher volatility opportunities
 - Larger potential reward with higher probability of loss
 
-High-risk mode should still avoid unlimited-risk strategies like naked short calls.
+**Estimated Downside**: Max loss can be substantial (up to 100% of premium paid for long options). High-risk mode avoids unlimited-risk strategies like naked short calls.
 
 ## Core Features
 
@@ -93,7 +99,7 @@ The app analyzes options using:
 
 ### Signal Scoring
 
-Each opportunity receives a score based on:
+Each risk-scored opportunity receives a score based on:
 
 - Liquidity
 - Risk/reward ratio
@@ -103,11 +109,29 @@ Each opportunity receives a score based on:
 - Event risk
 - User risk level
 
-### Paper Trading
+**Every recommendation includes estimated downside risk.** Scores are explainable and transparent; users can see the breakdown of factors contributing to each score.
 
-The first version of the app should support paper trading only.
+### Paper Trading (Required First Step)
 
-Paper trading allows users to test strategies without risking real money.
+**Paper trading is the first and required mode.** Users must validate their strategy and risk management in paper trading before considering live execution.
+
+Paper trading allows users to:
+
+- Test strategies without risking real money
+- Validate signal quality and timing
+- Practice risk management
+- Build confidence in their approach
+
+### Live Trading (Disabled by Default)
+
+Live trading is **disabled by default** and requires explicit user opt-in after:
+
+1. Completing paper trading validation
+2. Acknowledging all risk disclaimers
+3. Confirming understanding of max loss per trade
+4. Setting position size limits
+
+**Warning**: Enabling live trading means real money is at risk. Users are solely responsible for their trading decisions and losses.
 
 ## Suggested Tech Stack
 
@@ -166,3 +190,4 @@ options-tracker/
   docker-compose.yml
   README.md
   .env.example
+```
