@@ -38,6 +38,18 @@ class Config:
     # Redis
     REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
+    # Celery
+    CELERY_BROKER_URL: str = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/1")
+    CELERY_RESULT_BACKEND: str = os.getenv("CELERY_RESULT_BACKEND", "redis://localhost:6379/2")
+    CELERY_TASK_SERIALIZER: str = "json"
+    CELERY_RESULT_SERIALIZER: str = "json"
+    CELERY_ACCEPT_CONTENT: list = ["json"]
+    CELERY_TIMEZONE: str = "UTC"
+    CELERY_ENABLE_UTC: bool = True
+    CELERY_TASK_TRACK_STARTED: bool = True
+    CELERY_TASK_TIME_LIMIT: int = 30 * 60  # 30 minutes
+    CELERY_TASK_SOFT_TIME_LIMIT: int = 25 * 60  # 25 minutes
+
     # API Keys
     ALPHAVANTAGE_API_KEY: Optional[str] = os.getenv("ALPHAVANTAGE_API_KEY")
     POLYGON_API_KEY: Optional[str] = os.getenv("POLYGON_API_KEY")
@@ -54,6 +66,11 @@ class Config:
 
     # Logging
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
+
+    # Job Scheduling
+    DATA_REFRESH_INTERVAL_SECONDS: int = int(os.getenv("DATA_REFRESH_INTERVAL_SECONDS", "300"))  # 5 minutes
+    SIGNAL_GENERATION_INTERVAL_SECONDS: int = int(os.getenv("SIGNAL_GENERATION_INTERVAL_SECONDS", "600"))  # 10 minutes
+    TRADE_MONITORING_INTERVAL_SECONDS: int = int(os.getenv("TRADE_MONITORING_INTERVAL_SECONDS", "60"))  # 1 minute
 
     @classmethod
     def is_dev(cls) -> bool:

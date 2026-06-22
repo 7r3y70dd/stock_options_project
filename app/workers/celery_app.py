@@ -1,0 +1,5 @@
+"""Celery app instance for worker startup."""
+
+from app.core.celery import celery_app
+
+__all__ = ["celery_app"]

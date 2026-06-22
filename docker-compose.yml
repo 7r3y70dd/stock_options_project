@@ -34,6 +34,8 @@ services:
       ENVIRONMENT: dev
       DATABASE_URL: postgresql://options_user:options_password@postgres:5432/options_tracker
       REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
       DEBUG: "True"
       LOG_LEVEL: INFO
     ports:
@@ -43,6 +45,48 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    volumes:
+      - .:/app
+
+  celery_worker:
+    build: .
+    command: celery -A app.workers.celery_app worker --loglevel=info --queues=data_fetching,signal_generation,trade_monitoring,celery
+    environment:
+      ENVIRONMENT: dev
+      DATABASE_URL: postgresql://options_user:options_password@postgres:5432/options_tracker
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      DEBUG: "True"
+      LOG_LEVEL: INFO
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      app:
+        condition: service_started
+    volumes:
+      - .:/app
+
+  celery_beat:
+    build: .
+    command: celery -A app.workers.celery_app beat --loglevel=info
+    environment:
+      ENVIRONMENT: dev
+      DATABASE_URL: postgresql://options_user:options_password@postgres:5432/options_tracker
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      DEBUG: "True"
+      LOG_LEVEL: INFO
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      app:
+        condition: service_started
     volumes:
       - .:/app
 

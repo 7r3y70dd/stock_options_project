@@ -28,6 +28,7 @@ async def lifespan(app: FastAPI):
     logger.info(f"Debug mode: {config.DEBUG}")
     logger.info(f"Database: {config.DATABASE_URL}")
     logger.info(f"Redis: {config.REDIS_URL}")
+    logger.info(f"Celery Broker: {config.CELERY_BROKER_URL}")
 
     # Initialize database
     try:
@@ -35,6 +36,14 @@ async def lifespan(app: FastAPI):
         logger.info("Database initialized successfully")
     except Exception as e:
         logger.error(f"Failed to initialize database: {e}")
+        raise
+
+    # Initialize Celery
+    try:
+        from app.core.celery import celery_app
+        logger.info("Celery initialized successfully")
+    except Exception as e:
+        logger.error(f"Failed to initialize Celery: {e}")
         raise
 
     yield
