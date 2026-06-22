@@ -20,6 +20,122 @@ Options Tracker allows users to:
 
 **Live trading is disabled by default.** Users must explicitly enable live trading after understanding the risks and completing paper trading validation.
 
+## Quick Start
+
+### Prerequisites
+
+- Python 3.9+
+- pip or conda
+- Docker and Docker Compose (optional, for containerized setup)
+
+### Local Setup
+
+1. **Clone the repository**
+   ```bash
+   git clone https://github.com/yourusername/options-tracker.git
+   cd options-tracker
+   ```
+
+2. **Create a virtual environment**
+   ```bash
+   python -m venv venv
+   source venv/bin/activate  # On Windows: venv\Scripts\activate
+   ```
+
+3. **Install dependencies**
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+4. **Configure environment variables**
+   ```bash
+   cp .env.example .env
+   # Edit .env with your API keys and settings
+   ```
+
+5. **Run tests**
+   ```bash
+   pytest -v
+   ```
+
+6. **Start the application**
+   ```bash
+   python -m uvicorn app.main:app --reload
+   ```
+   The app will be available at `http://localhost:8000`
+
+### Docker Setup
+
+1. **Build and run with Docker Compose**
+   ```bash
+   docker-compose up --build
+   ```
+   The app will be available at `http://localhost:8000`
+
+2. **Stop the application**
+   ```bash
+   docker-compose down
+   ```
+
+## Environment Configuration
+
+Create a `.env` file in the project root (see `.env.example` for template):
+
+```bash
+# API Keys (required for data fetching)
+ALPHAVANTAGE_API_KEY=your_key_here
+POLYGON_API_KEY=your_key_here
+NEWS_API_KEY=your_key_here
+
+# Database
+DATABASE_URL=sqlite:///./options_tracker.db
+
+# Application
+DEBUG=False
+LOG_LEVEL=INFO
+
+# Paper Trading (enabled by default)
+PAPER_TRADING_ENABLED=True
+INITIAL_PORTFOLIO_VALUE=100000
+
+# Live Trading (disabled by default)
+LIVE_TRADING_ENABLED=False
+BROKER_API_KEY=your_broker_key_here
+BROKER_SECRET_KEY=your_broker_secret_here
+```
+
+## Project Structure
+
+```
+options-tracker/
+├── app/                          # Main application package
+│   ├── api/                      # API routes and endpoints
+│   ├── core/                     # Core configuration and utilities
+│   ├── data_sources/             # Market data, options chains, news integrations
+│   ├── models/                   # Data models (options, positions, trades)
+│   ├── news/                     # News analysis and sentiment scoring
+│   ├── options/                  # Options analysis and scoring
+│   ├── risk/                     # Risk management and guardrails
+│   ├── strategies/               # Trading strategies and signal generation
+│   ├── trading/                  # Paper and live trading execution
+│   ├── backtesting/              # Backtesting engine and historical analysis
+│   ├── workers/                  # Background workers and async tasks
+│   └── main.py                   # Application entry point
+├── services/                     # Legacy services (risk configs, options service)
+│   ├── __init__.py
+│   ├── options_service.py
+│   └── test_risk_guardrails.py
+├── tests/                        # Test suite
+│   └── __init__.py
+├── scripts/                      # Utility scripts
+├── docker-compose.yml            # Docker Compose configuration
+├── Dockerfile                    # Docker image definition
+├── requirements.txt              # Python dependencies
+├── .env.example                  # Environment variables template
+├── README.md                     # This file
+└── .gitignore                    # Git ignore rules
+```
+
 ## MVP User Flow
 
 The MVP defines a complete user journey from authentication through paper trade execution and position tracking. This flow ensures every screen has a defined purpose and no real-money trading occurs.
@@ -201,159 +317,97 @@ Each risk level is defined by a `RiskLevelConfig` object in `services/__init__.p
    - Medium: spreads, earnings-aware trades, credit/debit spreads
    - High: long calls/puts, short-duration trades, high-IV opportunities
 
-2. **Position Sizing Limits**:
-   - Max position size as % of portfolio
-   - Max loss per trade as % of portfolio
-   - Recommended position size based on max loss
+2. **Position Sizing**: Maximum position size as a percentage of portfolio
+   - Low: 5%
+   - Medium: 10%
+   - High: 15%
 
-3. **Expiration & Strike Filters**:
-   - Min/max days to expiration
-   - Moneyness range (strike / underlying price)
-   - Min liquidity score threshold
+3. **Loss Limits**: Maximum loss per trade and per day
+   - Low: 2% per trade, 3% per day
+   - Medium: 5% per trade, 5% per day
+   - High: 10% per trade, 10% per day
 
-4. **Scoring Weights**: Risk-level-specific factor weights
-   - Low: Emphasizes liquidity (30%) and spread tightness (25%)
+4. **Liquidity Requirements**: Minimum volume, open interest, and bid-ask spread
+   - Low: Strictest requirements (50 vol, 100 OI, 5% spread)
+   - Medium: Moderate requirements (20 vol, 50 OI, 8% spread)
+   - High: Relaxed requirements (5 vol, 10 OI, 12% spread)
+
+5. **Scoring Weights**: How different factors contribute to the overall score
+   - Low: Emphasizes liquidity and spread (55% combined)
    - Medium: Balanced across all factors
-   - High: Emphasizes volatility (30%) and time decay (30%)
-
-5. **Warning Thresholds**: Risk-level-specific alert triggers
-   - Wide spread warnings
-   - Low volume warnings
-   - Low open interest warnings
-   - High IV rank warnings
-
-## Global Risk Guardrails
-
-The app enforces hard constraints to prevent reckless trading. These guardrails are checked before any trade is approved, whether paper or live.
-
-### Guardrail Rules
-
-1. **Max Loss Per Trade**: Trade is rejected if max loss exceeds the risk level's limit
-   - Low: 2% of portfolio
-   - Medium: 5% of portfolio
-   - High: 10% of portfolio
-
-2. **Max Contracts Per Trade**: Hard limit of 10 contracts per trade
-
-3. **Max Daily Loss**: Trade is rejected if projected daily loss would exceed the risk level's limit
-   - Low: 3% of portfolio
-   - Medium: 5% of portfolio
-   - High: 10% of portfolio
-
-4. **Max Open Positions**: Trade is rejected if current open positions meet or exceed the risk level's limit
-   - Low: 5 positions
-   - Medium: 10 positions
-   - High: 15 positions
-
-5. **Bid-Ask Spread**: Trade is rejected if spread exceeds the risk level's maximum
-   - Low: 5% of mid price
-   - Medium: 8% of mid price
-   - High: 12% of mid price
-
-6. **Volume**: Trade is rejected if contract volume is below the risk level's minimum
-   - Low: 50 contracts
-   - Medium: 20 contracts
-   - High: 5 contracts
-
-7. **Open Interest**: Trade is rejected if open interest is below the risk level's minimum
-   - Low: 100 contracts
-   - Medium: 50 contracts
-   - High: 10 contracts
-
-8. **Earnings Window**: Trade is rejected if expiration falls within the earnings buffer window
-   - Low: 5 days before/after earnings
-   - Medium: 3 days before/after earnings
-   - High: 1 day before/after earnings
-
-9. **Live Trading Approval**: Live trades are rejected by default unless user has explicitly approved live trading
-   - Paper trades are always allowed
-   - Live trades require explicit user opt-in
-
-### Rejection Messages
-
-When a trade is rejected, the app provides a human-readable reason:
-
-- "Max loss per trade (X%) exceeds limit (Y%) for [risk level] risk level."
-- "Number of contracts (X) exceeds maximum (10)."
-- "Projected daily loss (X%) would exceed limit (Y%) for [risk level] risk level."
-- "Current open positions (X) meets or exceeds maximum (Y) for [risk level] risk level."
-- "Bid-ask spread (X%) exceeds maximum (Y%) for [risk level] risk level."
-- "Contract volume (X) is below minimum (Y) for [risk level] risk level."
-- "Contract open interest (X) is below minimum (Y) for [risk level] risk level."
-- "Trade is within X days of earnings date (YYYY-MM-DD). Restricted for [risk level] risk level."
-- "Live trading is disabled by default. User must explicitly approve live trading before any real-money trades can be executed."
-
-### RiskEngine Implementation
-
-The `RiskEngine` class in `services/options_service.py` validates trades against all guardrails:
-
-```python
-engine = RiskEngine(risk_level=RiskLevel.MEDIUM)
-guardrail = engine.validate_trade(
-    contract,
-    max_loss_pct=2.5,
-    num_contracts=1,
-    current_daily_loss_pct=1.0,
-    current_open_positions=3,
-    is_live_trading=False,
-    user_approved_live_trading=False,
-)
-
-if guardrail.passed:
-    print("Trade approved!")
-else:
-    print(f"Trade rejected: {guardrail.message}")
-```
-
-## Signal Scoring
-
-Each opportunity is scored on a 0–100 scale based on five factors:
-
-1. **Liquidity** (weight varies by risk level): Volume + open interest
-2. **Spread** (weight varies by risk level): Bid-ask spread tightness
-3. **Moneyness** (weight varies by risk level): Distance from at-the-money
-4. **Volatility** (weight varies by risk level): Implied volatility level
-5. **Time Decay** (weight varies by risk level): Days to expiration
-
-Scores are normalized to 0–100 and mapped to grades:
-
-- **Watchlist** (75–100): High-confidence opportunities
-- **Candidate** (50–74): Medium-confidence opportunities
-- **Avoid** (0–49): Low-confidence opportunities
-
-Each score includes a breakdown showing the contribution of each factor, so users understand why the app ranked an opportunity.
-
-## Paper Trading
-
-**Paper trading is required before live trading.** Paper trades allow users to:
-
-- Test strategies without risking real money
-- Validate the app's scoring and recommendations
-- Build confidence in the risk level selection
-- Understand how positions behave in real market conditions
-
-Paper trades are tracked separately from live trades and do not affect real portfolio performance.
-
-## Live Trading
-
-**Live trading is disabled by default.** To enable live trading, users must:
-
-1. Complete at least one full paper trade cycle (entry → monitoring → exit)
-2. Explicitly opt-in to live trading in the app settings
-3. Confirm understanding of the risks and disclaimers
-
-Once enabled, live trades are subject to the same guardrails as paper trades. Users can disable live trading at any time.
+   - High: Emphasizes volatility and time decay (60% combined)
 
 ## Testing
 
-Unit tests cover all risk guardrails and rejection scenarios:
+Run the test suite to verify the application:
 
 ```bash
-pytest -q services/test_risk_guardrails.py
+# Run all tests
+pytest -v
+
+# Run specific test file
+pytest services/test_risk_guardrails.py -v
+
+# Run with coverage
+pytest --cov=services --cov=app tests/
 ```
 
-Tests verify:
-- Each guardrail rejects trades correctly
-- Rejection messages are human-readable
-- Paper trades bypass live trading approval
-- Risk level changes affect guardrail thresholds
+## Development
+
+### Adding New Features
+
+1. Create feature branch: `git checkout -b feature/your-feature`
+2. Implement changes in appropriate `app/` subdirectory
+3. Add tests in `tests/` directory
+4. Run tests and ensure they pass
+5. Submit pull request
+
+### Code Style
+
+This project follows PEP 8. Use `black` for formatting:
+
+```bash
+black app/ services/ tests/
+```
+
+## Troubleshooting
+
+### Import Errors
+
+Ensure the virtual environment is activated and dependencies are installed:
+
+```bash
+source venv/bin/activate
+pip install -r requirements.txt
+```
+
+### Database Issues
+
+Reset the database:
+
+```bash
+rm options_tracker.db
+python -c "from app.core.database import init_db; init_db()"
+```
+
+### API Key Issues
+
+Verify your `.env` file has valid API keys for all required services.
+
+## Contributing
+
+Contributions are welcome! Please:
+
+1. Fork the repository
+2. Create a feature branch
+3. Add tests for new functionality
+4. Ensure all tests pass
+5. Submit a pull request
+
+## License
+
+MIT License - see LICENSE file for details
+
+## Support
+
+For issues, questions, or suggestions, please open an issue on GitHub.
