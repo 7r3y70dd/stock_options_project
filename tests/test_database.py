@@ -2,6 +2,7 @@
 
 import pytest
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 
 from app.core.config import Config, Environment
 from app.core.database import SessionLocal, init_db, reset_db, Base, engine
@@ -157,6 +158,84 @@ class TestWatchlistModel:
         ).all()
         assert len(retrieved_symbols) == 3
         assert [s.symbol for s in retrieved_symbols] == symbols
+
+    def test_watchlist_symbol_remove(self, db_session: Session):
+        """Test removing symbols from watchlist."""
+        user = User(
+            username="testuser",
+            email="test@example.com",
+            hashed_password="hashed_password",
+        )
+        db_session.add(user)
+        db_session.commit()
+        
+        watchlist = Watchlist(
+            user_id=user.id,
+            name="Tech Stocks",
+        )
+        db_session.add(watchlist)
+        db_session.commit()
+        
+        # Add symbols
+        symbols = ["AAPL", "MSFT", "GOOGL"]
+        for symbol in symbols:
+            ws = WatchlistSymbol(
+                watchlist_id=watchlist.id,
+                symbol=symbol,
+            )
+            db_session.add(ws)
+        db_session.commit()
+        
+        # Remove one symbol
+        to_remove = db_session.query(WatchlistSymbol).filter_by(
+            watchlist_id=watchlist.id,
+            symbol="MSFT"
+        ).first()
+        db_session.delete(to_remove)
+        db_session.commit()
+        
+        # Verify removal
+        retrieved_symbols = db_session.query(WatchlistSymbol).filter_by(
+            watchlist_id=watchlist.id
+        ).all()
+        assert len(retrieved_symbols) == 2
+        assert [s.symbol for s in retrieved_symbols] == ["AAPL", "GOOGL"]
+
+    def test_watchlist_duplicate_symbols_blocked(self, db_session: Session):
+        """Test that duplicate symbols are blocked in the same watchlist."""
+        user = User(
+            username="testuser",
+            email="test@example.com",
+            hashed_password="hashed_password",
+        )
+        db_session.add(user)
+        db_session.commit()
+        
+        watchlist = Watchlist(
+            user_id=user.id,
+            name="Tech Stocks",
+        )
+        db_session.add(watchlist)
+        db_session.commit()
+        
+        # Add first symbol
+        ws1 = WatchlistSymbol(
+            watchlist_id=watchlist.id,
+            symbol="AAPL",
+        )
+        db_session.add(ws1)
+        db_session.commit()
+        
+        # Try to add duplicate symbol
+        ws2 = WatchlistSymbol(
+            watchlist_id=watchlist.id,
+            symbol="AAPL",
+        )
+        db_session.add(ws2)
+        
+        # Should raise IntegrityError due to unique constraint
+        with pytest.raises(IntegrityError):
+            db_session.commit()
 
 
 class TestOptionContractModel:

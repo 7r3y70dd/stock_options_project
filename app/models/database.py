@@ -79,6 +79,11 @@ class WatchlistSymbol(Base):
     # Relationships
     watchlist = relationship("Watchlist", back_populates="symbols")
 
+    # Unique constraint: prevent duplicate symbols in the same watchlist
+    __table_args__ = (
+        UniqueConstraint('watchlist_id', 'symbol', name='uq_watchlist_symbol'),
+    )
+
 
 class OptionContract(Base):
     """Option contract model."""
