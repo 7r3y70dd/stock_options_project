@@ -5,7 +5,7 @@ Defines risk level configurations and helper functions for options analysis.
 
 from enum import Enum
 from dataclasses import dataclass
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 
 class RiskLevel(Enum):
@@ -13,6 +13,34 @@ class RiskLevel(Enum):
     LOW = "low"
     MEDIUM = "medium"
     HIGH = "high"
+
+
+class RejectionReason(Enum):
+    """Enumeration of reasons a trade may be rejected by guardrails."""
+    MAX_LOSS_EXCEEDED = "max_loss_exceeded"
+    MAX_CONTRACTS_EXCEEDED = "max_contracts_exceeded"
+    MAX_DAILY_LOSS_EXCEEDED = "max_daily_loss_exceeded"
+    MAX_OPEN_POSITIONS_EXCEEDED = "max_open_positions_exceeded"
+    BID_ASK_SPREAD_TOO_WIDE = "bid_ask_spread_too_wide"
+    VOLUME_TOO_LOW = "volume_too_low"
+    OPEN_INTEREST_TOO_LOW = "open_interest_too_low"
+    EARNINGS_WINDOW_RESTRICTED = "earnings_window_restricted"
+    LIVE_TRADING_NOT_APPROVED = "live_trading_not_approved"
+    PASSED = "passed"
+
+
+@dataclass
+class RiskGuardrail:
+    """Result of a trade validation against guardrails.
+    
+    Attributes:
+        passed: Whether the trade passed all guardrails.
+        reason: RejectionReason enum value.
+        message: Human-readable explanation of the result.
+    """
+    passed: bool
+    reason: RejectionReason
+    message: str
 
 
 @dataclass
@@ -30,6 +58,12 @@ class RiskLevelConfig:
         min_liquidity_score: Minimum liquidity score (0-100).
         scoring_weights: Dict of factor weights for scoring calculation.
         warning_thresholds: Dict of thresholds for warning flags.
+        max_daily_loss_pct: Maximum daily loss as % of portfolio.
+        max_open_positions: Maximum number of open positions.
+        min_volume: Minimum contract volume required.
+        min_open_interest: Minimum open interest required.
+        max_bid_ask_spread_pct: Maximum bid-ask spread as % of mid price.
+        earnings_buffer_days: Days before/after earnings to restrict trading.
     """
     risk_level: RiskLevel
     allowed_strategies: List[str]
@@ -41,6 +75,12 @@ class RiskLevelConfig:
     min_liquidity_score: float
     scoring_weights: Dict[str, float]
     warning_thresholds: Dict[str, float]
+    max_daily_loss_pct: float = 5.0
+    max_open_positions: int = 10
+    min_volume: int = 10
+    min_open_interest: int = 10
+    max_bid_ask_spread_pct: float = 0.10
+    earnings_buffer_days: int = 3
 
 
 # Risk level configurations defining concrete behaviors
@@ -74,6 +114,12 @@ RISK_CONFIGS = {
             "low_open_interest": 100,
             "high_iv_rank": 0.80,
         },
+        max_daily_loss_pct=3.0,
+        max_open_positions=5,
+        min_volume=50,
+        min_open_interest=100,
+        max_bid_ask_spread_pct=0.05,
+        earnings_buffer_days=5,
     ),
     RiskLevel.MEDIUM: RiskLevelConfig(
         risk_level=RiskLevel.MEDIUM,
@@ -108,6 +154,12 @@ RISK_CONFIGS = {
             "low_open_interest": 50,
             "high_iv_rank": 0.90,
         },
+        max_daily_loss_pct=5.0,
+        max_open_positions=10,
+        min_volume=20,
+        min_open_interest=50,
+        max_bid_ask_spread_pct=0.08,
+        earnings_buffer_days=3,
     ),
     RiskLevel.HIGH: RiskLevelConfig(
         risk_level=RiskLevel.HIGH,
@@ -146,6 +198,12 @@ RISK_CONFIGS = {
             "low_open_interest": 10,
             "high_iv_rank": 0.95,
         },
+        max_daily_loss_pct=10.0,
+        max_open_positions=15,
+        min_volume=5,
+        min_open_interest=10,
+        max_bid_ask_spread_pct=0.12,
+        earnings_buffer_days=1,
     ),
 }
 
