@@ -5,7 +5,7 @@ Provides risk-level-aware scoring, filtering, and ranking of options opportuniti
 
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, asdict
-from datetime import datetime
+from datetime import datetime, timedelta
 import math
 
 from app.data_sources import DataProvider, MockDataProvider
@@ -45,6 +45,209 @@ class ScoredOption:
     explanation: str
     max_loss_pct: float
     position_size_pct: float
+
+
+@dataclass
+class FilteredContract:
+    """Result of filtering a contract."""
+    contract: Optional[OptionContract]
+    passed: bool
+    rejection_reason: RejectionReason
+    rejection_message: str
+
+
+class OptionsChainFilter:
+    """Filter for option contracts based on quality and risk criteria."""
+
+    def __init__(self, risk_level: RiskLevel = RiskLevel.MEDIUM):
+        """Initialize the filter with a risk level.
+        
+        Args:
+            risk_level: The RiskLevel to use for filtering.
+        """
+        self.risk_level = risk_level
+        self.config = get_risk_config(risk_level)
+
+    def filter_contracts(
+        self, contracts: List[OptionContract]
+    ) -> List[FilteredContract]:
+        """Filter a list of option contracts and return results with rejection reasons.
+        
+        Args:
+            contracts: List of OptionContract objects to filter.
+        
+        Returns:
+            List of FilteredContract objects with pass/fail status and rejection reasons.
+        """
+        results = []
+        for contract in contracts:
+            result = self._filter_single_contract(contract)
+            results.append(result)
+        return results
+
+    def _filter_single_contract(self, contract: OptionContract) -> FilteredContract:
+        """Filter a single contract and return result with rejection reason.
+        
+        Args:
+            contract: The OptionContract to filter.
+        
+        Returns:
+            FilteredContract with pass/fail status and rejection reason.
+        """
+        # Check if contract is expired
+        if self._is_expired(contract):
+            return FilteredContract(
+                contract=contract,
+                passed=False,
+                rejection_reason=RejectionReason.EXPIRED,
+                rejection_message="Contract has expired.",
+            )
+
+        # Check for missing bid/ask
+        if not self._has_bid_ask(contract):
+            return FilteredContract(
+                contract=contract,
+                passed=False,
+                rejection_reason=RejectionReason.MISSING_BID_ASK,
+                rejection_message="Contract is missing bid or ask price.",
+            )
+
+        # Check volume (liquidity)
+        if not self._has_sufficient_volume(contract):
+            return FilteredContract(
+                contract=contract,
+                passed=False,
+                rejection_reason=RejectionReason.VOLUME_TOO_LOW,
+                rejection_message=f"Contract volume ({contract.volume}) is below minimum ({self.config.min_volume}) for {self.risk_level.value} risk level.",
+            )
+
+        # Check open interest (liquidity)
+        if not self._has_sufficient_open_interest(contract):
+            return FilteredContract(
+                contract=contract,
+                passed=False,
+                rejection_reason=RejectionReason.OPEN_INTEREST_TOO_LOW,
+                rejection_message=f"Contract open interest ({contract.open_interest}) is below minimum ({self.config.min_open_interest}) for {self.risk_level.value} risk level.",
+            )
+
+        # Check bid-ask spread
+        spread_check = self._check_bid_ask_spread(contract)
+        if not spread_check["passed"]:
+            return FilteredContract(
+                contract=contract,
+                passed=False,
+                rejection_reason=RejectionReason.BID_ASK_SPREAD_TOO_WIDE,
+                rejection_message=spread_check["message"],
+            )
+
+        # Check expiration window
+        if not self._is_in_expiration_window(contract):
+            return FilteredContract(
+                contract=contract,
+                passed=False,
+                rejection_reason=RejectionReason.OUTSIDE_EXPIRATION_WINDOW,
+                rejection_message=f"Contract expiration ({contract.days_to_expiration} days) is outside window ({self.config.min_days_to_expiration}-{self.config.max_days_to_expiration} days) for {self.risk_level.value} risk level.",
+            )
+
+        # All filters passed
+        return FilteredContract(
+            contract=contract,
+            passed=True,
+            rejection_reason=RejectionReason.PASSED,
+            rejection_message="Contract passed all filters.",
+        )
+
+    def _is_expired(self, contract: OptionContract) -> bool:
+        """Check if contract has expired.
+        
+        Args:
+            contract: The OptionContract to check.
+        
+        Returns:
+            True if contract is expired, False otherwise.
+        """
+        if contract.days_to_expiration is None:
+            return True
+        return contract.days_to_expiration <= 0
+
+    def _has_bid_ask(self, contract: OptionContract) -> bool:
+        """Check if contract has both bid and ask prices.
+        
+        Args:
+            contract: The OptionContract to check.
+        
+        Returns:
+            True if both bid and ask are present, False otherwise.
+        """
+        return contract.bid is not None and contract.ask is not None
+
+    def _has_sufficient_volume(self, contract: OptionContract) -> bool:
+        """Check if contract has sufficient volume.
+        
+        Args:
+            contract: The OptionContract to check.
+        
+        Returns:
+            True if volume meets minimum, False otherwise.
+        """
+        if contract.volume is None:
+            return False
+        return contract.volume >= self.config.min_volume
+
+    def _has_sufficient_open_interest(self, contract: OptionContract) -> bool:
+        """Check if contract has sufficient open interest.
+        
+        Args:
+            contract: The OptionContract to check.
+        
+        Returns:
+            True if open interest meets minimum, False otherwise.
+        """
+        if contract.open_interest is None:
+            return False
+        return contract.open_interest >= self.config.min_open_interest
+
+    def _check_bid_ask_spread(self, contract: OptionContract) -> Dict[str, any]:
+        """Check if bid-ask spread is acceptable.
+        
+        Args:
+            contract: The OptionContract to check.
+        
+        Returns:
+            Dict with 'passed' bool and 'message' str.
+        """
+        if contract.bid is None or contract.ask is None or contract.bid <= 0:
+            return {"passed": False, "message": "Cannot calculate spread: missing or invalid bid/ask."}
+
+        mid = (contract.bid + contract.ask) / 2.0
+        if mid <= 0:
+            return {"passed": False, "message": "Cannot calculate spread: invalid midpoint."}
+
+        spread_pct = (contract.ask - contract.bid) / mid
+        if spread_pct > self.config.max_bid_ask_spread_pct:
+            return {
+                "passed": False,
+                "message": f"Bid-ask spread ({spread_pct:.2%}) exceeds maximum ({self.config.max_bid_ask_spread_pct:.2%}) for {self.risk_level.value} risk level.",
+            }
+
+        return {"passed": True, "message": "Bid-ask spread is acceptable."}
+
+    def _is_in_expiration_window(self, contract: OptionContract) -> bool:
+        """Check if contract expiration is within acceptable window.
+        
+        Args:
+            contract: The OptionContract to check.
+        
+        Returns:
+            True if expiration is within window, False otherwise.
+        """
+        if contract.days_to_expiration is None:
+            return False
+        return (
+            self.config.min_days_to_expiration
+            <= contract.days_to_expiration
+            <= self.config.max_days_to_expiration
+        )
 
 
 class RiskEngine:
@@ -207,6 +410,7 @@ class OptionsService:
         self.risk_level = risk_level
         self.config = get_risk_config(risk_level)
         self.risk_engine = RiskEngine(risk_level)
+        self.filter = OptionsChainFilter(risk_level)
         self.data_provider = data_provider or MockDataProvider()
 
     def score_contract(
@@ -303,9 +507,7 @@ class OptionsService:
             return None
 
         # Generate explanation
-        explanation = self._generate_explanation(
-            contract, strategy, score, breakdown, warnings, max_loss_pct
-        )
+        explanation = self._generate_explanation(contract, strategy, score, breakdown)
 
         return ScoredOption(
             symbol=contract.symbol,
@@ -323,64 +525,85 @@ class OptionsService:
         )
 
     def _determine_strategy(self, contract: OptionContract, price: float) -> str:
-        """Determine the strategy type for a contract."""
-        # Placeholder implementation
-        return "long_call" if contract.contract_type == "call" else "long_put"
+        """Determine strategy based on contract characteristics."""
+        moneyness = contract.strike / price
+        if contract.contract_type == "call":
+            if 0.98 <= moneyness <= 1.02:
+                return "covered_call"
+            elif moneyness > 1.02:
+                return "bull_call_spread"
+        else:  # put
+            if 0.98 <= moneyness <= 1.02:
+                return "cash_secured_put"
+            elif moneyness < 0.98:
+                return "bear_put_spread"
+        return "covered_call"
 
     def _score_liquidity(self, contract: OptionContract) -> float:
         """Score liquidity based on volume and open interest."""
-        volume_score = min(100.0, (contract.volume or 0) / 100.0)
-        oi_score = min(100.0, (contract.open_interest or 0) / 1000.0)
-        return (volume_score + oi_score) / 2.0
+        volume_score = min(100.0, (contract.volume or 0) / self.config.min_volume * 50)
+        oi_score = min(100.0, (contract.open_interest or 0) / self.config.min_open_interest * 50)
+        return (volume_score + oi_score) / 2
 
     def _score_spread(self, contract: OptionContract) -> float:
-        """Score bid-ask spread."""
+        """Score bid-ask spread (lower spread = higher score)."""
         if contract.bid is None or contract.ask is None or contract.bid <= 0:
             return 0.0
         mid = (contract.bid + contract.ask) / 2.0
-        spread_pct = (contract.ask - contract.bid) / mid if mid > 0 else 1.0
-        return max(0.0, 100.0 * (1.0 - spread_pct * 100.0))
+        if mid <= 0:
+            return 0.0
+        spread_pct = (contract.ask - contract.bid) / mid
+        return max(0.0, 100.0 - (spread_pct * 1000))
 
     def _score_moneyness(self, moneyness: float) -> float:
-        """Score moneyness (ATM is best)."""
+        """Score moneyness (ATM = highest score)."""
         distance_from_atm = abs(moneyness - 1.0)
-        return max(0.0, 100.0 * (1.0 - distance_from_atm))
+        return max(0.0, 100.0 - (distance_from_atm * 100))
 
     def _score_volatility(self, contract: OptionContract) -> float:
         """Score implied volatility."""
         if contract.implied_volatility is None:
             return 50.0
-        # Higher IV is generally better for sellers, lower for buyers
-        return min(100.0, contract.implied_volatility * 100.0)
+        # Higher IV = higher score (more premium)
+        return min(100.0, contract.implied_volatility * 100)
 
     def _score_time_decay(self, contract: OptionContract) -> float:
         """Score time decay (theta)."""
         if contract.days_to_expiration is None:
             return 50.0
-        # Optimal DTE is typically 30-45 days
-        optimal_dte = 37.5
-        distance = abs(contract.days_to_expiration - optimal_dte)
-        return max(0.0, 100.0 * (1.0 - distance / 100.0))
+        # Optimal time decay window: 14-45 days
+        if 14 <= contract.days_to_expiration <= 45:
+            return 100.0
+        elif contract.days_to_expiration < 14:
+            return 50.0 + (contract.days_to_expiration / 14 * 50)
+        else:
+            return max(0.0, 100.0 - ((contract.days_to_expiration - 45) / 45 * 50))
 
     def _generate_warnings(self, contract: OptionContract, breakdown: Dict[str, float]) -> List[str]:
-        """Generate warnings for a contract."""
+        """Generate warnings for contract."""
         warnings = []
-        if breakdown.get("spread", 100.0) < 50.0:
-            warnings.append("Wide bid-ask spread")
-        if breakdown.get("liquidity", 100.0) < 50.0:
+        if breakdown["liquidity"] < 50:
             warnings.append("Low liquidity")
+        if breakdown["spread"] < 50:
+            warnings.append("Wide bid-ask spread")
+        if breakdown["volatility"] < 30:
+            warnings.append("Low implied volatility")
         return warnings
 
     def _calculate_max_loss(self, contract: OptionContract, strategy: str, price: float) -> float:
         """Calculate maximum loss as percentage of portfolio."""
-        # Placeholder: assume 2% max loss per trade
-        return 2.0
+        # Simplified: use bid-ask midpoint as premium
+        if contract.bid is None or contract.ask is None:
+            return 5.0
+        premium = (contract.bid + contract.ask) / 2.0
+        max_loss_pct = (premium / price) * 100
+        return min(max_loss_pct, self.config.max_loss_per_trade_pct)
 
     def _calculate_position_size(self, max_loss_pct: float) -> float:
         """Calculate position size based on max loss."""
-        # Placeholder: assume 1 contract per 2% max loss
-        return 1.0
+        # Risk 1% of portfolio per trade
+        return (1.0 / max_loss_pct) * 100 if max_loss_pct > 0 else 1.0
 
-    def _generate_explanation(self, contract: OptionContract, strategy: str, score: float, breakdown: Dict[str, float], warnings: List[str], max_loss_pct: float) -> str:
-        """Generate human-readable explanation for the score."""
-        return f"Scored {score:.1f}/100 for {strategy} strategy. Max loss: {max_loss_pct:.2f}%."
+    def _generate_explanation(self, contract: OptionContract, strategy: str, score: float, breakdown: Dict[str, float]) -> str:
+        """Generate human-readable explanation of the signal."""
+        return f"Strategy: {strategy}. Score: {score:.1f}/100. Liquidity: {breakdown['liquidity']:.0f}, Spread: {breakdown['spread']:.0f}, Moneyness: {breakdown['moneyness']:.0f}, Volatility: {breakdown['volatility']:.0f}, Time Decay: {breakdown['time_decay']:.0f}."
