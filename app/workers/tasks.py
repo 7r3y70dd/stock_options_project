@@ -7,7 +7,7 @@ from typing import Optional
 from app.core.celery import celery_app
 from app.core.config import config
 from app.core.database import SessionLocal
-from app.data_sources import DataProvider, MockDataProvider, AlphaVantageProvider
+from app.data_sources import DataProvider, MockDataProvider, AlphaVantageProvider, YfinanceProvider
 from app.models.database import Signal, Trade, OptionContract
 
 logger = logging.getLogger(__name__)
@@ -37,6 +37,17 @@ def get_data_provider() -> DataProvider:
             except ValueError as e:
                 logger.warning(f"Failed to initialize AlphaVantageProvider: {e}. Falling back to MockDataProvider.")
                 _data_provider = MockDataProvider()
+        elif provider_name == "yfinance":
+            if not config.YFINANCE_ENABLED:
+                logger.warning("yfinance provider requested but disabled in config. Falling back to MockDataProvider.")
+                _data_provider = MockDataProvider()
+            else:
+                try:
+                    _data_provider = YfinanceProvider(warn_on_init=True)
+                    logger.info("Initialized YfinanceProvider for background tasks")
+                except ImportError as e:
+                    logger.warning(f"Failed to initialize YfinanceProvider: {e}. Falling back to MockDataProvider.")
+                    _data_provider = MockDataProvider()
         else:
             # Default to mock provider
             _data_provider = MockDataProvider()
