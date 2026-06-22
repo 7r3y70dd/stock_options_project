@@ -1,7 +1,4 @@
-"""External data source integrations (market data, news, etc.).
-
-Provides abstract interface for data providers and concrete implementations.
-"""
+"""Data sources module for fetching market data from various providers."""
 
 from app.data_sources.data_provider import (
     DataProvider,
@@ -12,6 +9,7 @@ from app.data_sources.data_provider import (
     EarningsDate,
 )
 from app.data_sources.mock_provider import MockDataProvider
+from app.data_sources.alpha_vantage_provider import AlphaVantageProvider
 
 __all__ = [
     "DataProvider",
@@ -21,4 +19,5 @@ __all__ = [
     "NewsArticle",
     "EarningsDate",
     "MockDataProvider",
+    "AlphaVantageProvider",
 ]

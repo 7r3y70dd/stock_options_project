@@ -7,7 +7,7 @@ from typing import Optional
 from app.core.celery import celery_app
 from app.core.config import config
 from app.core.database import SessionLocal
-from app.data_sources import DataProvider, MockDataProvider
+from app.data_sources import DataProvider, MockDataProvider, AlphaVantageProvider
 from app.models.database import Signal, Trade, OptionContract
 
 logger = logging.getLogger(__name__)
@@ -17,16 +17,31 @@ _data_provider: Optional[DataProvider] = None
 
 
 def get_data_provider() -> DataProvider:
-    """Get or initialize the data provider.
+    """Get or initialize the data provider based on configuration.
     
     Returns:
         DataProvider instance
     """
     global _data_provider
     if _data_provider is None:
-        # Use mock provider by default; can be swapped for real providers
-        _data_provider = MockDataProvider()
-        logger.info("Initialized MockDataProvider for background tasks")
+        provider_name = config.DATA_PROVIDER.lower()
+        
+        if provider_name == "alphavantage":
+            try:
+                _data_provider = AlphaVantageProvider(
+                    api_key=config.ALPHAVANTAGE_API_KEY,
+                    rate_limit_calls_per_minute=config.ALPHAVANTAGE_RATE_LIMIT_CALLS_PER_MINUTE,
+                    cache_ttl_seconds=config.ALPHAVANTAGE_CACHE_TTL_SECONDS,
+                )
+                logger.info("Initialized AlphaVantageProvider for background tasks")
+            except ValueError as e:
+                logger.warning(f"Failed to initialize AlphaVantageProvider: {e}. Falling back to MockDataProvider.")
+                _data_provider = MockDataProvider()
+        else:
+            # Default to mock provider
+            _data_provider = MockDataProvider()
+            logger.info("Initialized MockDataProvider for background tasks")
+    
     return _data_provider
 
 
