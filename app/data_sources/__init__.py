@@ -1,9 +1,6 @@
-"""Data sources module for market data providers.
+"""Data sources package.
 
-Provides abstract DataProvider interface and concrete implementations:
-- MockDataProvider: Synthetic data for testing
-- AlphaVantageProvider: Alpha Vantage API integration
-- YfinanceProvider: yfinance library integration (dev fallback)
+Provides data provider interface and implementations.
 """
 
 from app.data_sources.data_provider import (
@@ -17,6 +14,7 @@ from app.data_sources.data_provider import (
 from app.data_sources.mock_provider import MockDataProvider
 from app.data_sources.alpha_vantage_provider import AlphaVantageProvider
 from app.data_sources.yfinance_provider import YfinanceProvider
+from app.data_sources.finnhub_provider import FinnhubProvider
 
 __all__ = [
     "DataProvider",
@@ -28,4 +26,5 @@ __all__ = [
     "MockDataProvider",
     "AlphaVantageProvider",
     "YfinanceProvider",
+    "FinnhubProvider",
 ]
