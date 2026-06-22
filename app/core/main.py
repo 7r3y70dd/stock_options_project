@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.health import router as health_router
 from app.core.config import config
+from app.core.database import init_db
 from app.core.error_handling import register_exception_handlers
 
 logger = logging.getLogger(__name__)
@@ -27,6 +28,14 @@ async def lifespan(app: FastAPI):
     logger.info(f"Debug mode: {config.DEBUG}")
     logger.info(f"Database: {config.DATABASE_URL}")
     logger.info(f"Redis: {config.REDIS_URL}")
+
+    # Initialize database
+    try:
+        init_db()
+        logger.info("Database initialized successfully")
+    except Exception as e:
+        logger.error(f"Failed to initialize database: {e}")
+        raise
 
     yield
 
