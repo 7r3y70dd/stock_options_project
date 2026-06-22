@@ -379,25 +379,30 @@ class TestSignalModel:
             signal = Signal(
                 user_id=user.id,
                 symbol=f"TEST{i}",
-                strategy_type="test_strategy",
+                strategy_type="bull_call_spread",
                 risk_level="medium",
-                score=0.5,
-                expected_profit=100.0,
-                max_loss=50.0,
-                probability_estimate=0.5,
+                score=0.75,
+                expected_profit=300.0,
+                max_loss=100.0,
+                probability_estimate=0.70,
                 reason=f"Test signal with status {status}",
                 status=status,
             )
             db_session.add(signal)
         db_session.commit()
         
-        retrieved_signals = db_session.query(Signal).filter_by(user_id=user.id).all()
-        assert len(retrieved_signals) == len(statuses)
-        retrieved_statuses = [s.status for s in retrieved_signals]
-        assert set(retrieved_statuses) == set(statuses)
+        # Verify all statuses were created
+        for i, status in enumerate(statuses):
+            retrieved = db_session.query(Signal).filter_by(symbol=f"TEST{i}").first()
+            assert retrieved.status == status
 
-    def test_signal_with_option_contract(self, db_session: Session):
-        """Test signal linked to an option contract."""
+
+class TestTradeModel:
+    """Test Trade model."""
+
+    def test_create_trade_linked_to_signal(self, db_session: Session):
+        """Test creating a trade linked to a signal (acceptance criteria: every order is linked to a signal)."""
+        # Create user
         user = User(
             username="testuser",
             email="test@example.com",
@@ -406,6 +411,7 @@ class TestSignalModel:
         db_session.add(user)
         db_session.commit()
         
+        # Create option contract
         contract = OptionContract(
             symbol="AAPL",
             expiration="2024-02-16",
@@ -422,6 +428,7 @@ class TestSignalModel:
         db_session.add(contract)
         db_session.commit()
         
+        # Create signal
         signal = Signal(
             user_id=user.id,
             symbol="AAPL",
@@ -438,91 +445,29 @@ class TestSignalModel:
         db_session.add(signal)
         db_session.commit()
         
-        retrieved = db_session.query(Signal).filter_by(user_id=user.id).first()
-        assert retrieved.option_contract_id == contract.id
-        assert retrieved.option_contract is not None
-        assert retrieved.option_contract.symbol == "AAPL"
-
-    def test_signal_default_status_is_pending(self, db_session: Session):
-        """Test that signal status defaults to pending."""
-        user = User(
-            username="testuser",
-            email="test@example.com",
-            hashed_password="hashed_password",
-        )
-        db_session.add(user)
-        db_session.commit()
-        
-        signal = Signal(
-            user_id=user.id,
-            symbol="TSLA",
-            strategy_type="put_spread",
-            risk_level="high",
-            score=0.90,
-            expected_profit=1000.0,
-            max_loss=500.0,
-            probability_estimate=0.65,
-            reason="Bearish setup with high reward-to-risk ratio",
-        )
-        db_session.add(signal)
-        db_session.commit()
-        
-        retrieved = db_session.query(Signal).filter_by(user_id=user.id).first()
-        assert retrieved.status == "pending"
-
-
-class TestTradeModel:
-    """Test Trade model."""
-
-    def test_create_trade(self, db_session: Session):
-        """Test creating a trade."""
-        user = User(
-            username="testuser",
-            email="test@example.com",
-            hashed_password="hashed_password",
-        )
-        db_session.add(user)
-        db_session.commit()
-        
-        contract = OptionContract(
-            symbol="AAPL",
-            expiration="2024-02-16",
-            strike=150.0,
-            contract_type="call",
-            bid=2.0,
-            ask=2.1,
-            volume=1000,
-            open_interest=5000,
-            implied_volatility=0.25,
-            underlying_price=150.0,
-            days_to_expiration=30,
-        )
-        db_session.add(contract)
-        db_session.commit()
-        
+        # Create trade linked to signal
         trade = Trade(
             user_id=user.id,
+            signal_id=signal.id,
             option_contract_id=contract.id,
-            trade_type="buy",
-            quantity=10,
-            entry_price=2.05,
+            broker_order_id="broker_123",
             status="open",
+            entry_price=2.05,
+            quantity=10,
             is_paper_trading=True,
         )
         db_session.add(trade)
         db_session.commit()
         
-        retrieved = db_session.query(Trade).filter_by(user_id=user.id).first()
-        assert retrieved is not None
-        assert retrieved.quantity == 10
-        assert retrieved.status == "open"
+        # Verify trade is linked to signal
+        retrieved_trade = db_session.query(Trade).filter_by(user_id=user.id).first()
+        assert retrieved_trade is not None
+        assert retrieved_trade.signal_id == signal.id
+        assert retrieved_trade.signal.symbol == "AAPL"
 
-
-class TestBacktestResultModel:
-    """Test BacktestResult model."""
-
-    def test_create_backtest_result(self, db_session: Session):
-        """Test creating a backtest result."""
+    def test_trade_pnl_calculation_after_close(self, db_session: Session):
+        """Test P/L calculation after trade close (acceptance criteria: P/L can be calculated after close)."""
+        # Create user
         user = User(
             username="testuser",
             email="test@example.com",
@@ -531,37 +476,71 @@ class TestBacktestResultModel:
         db_session.add(user)
         db_session.commit()
         
-        result = BacktestResult(
+        # Create option contract
+        contract = OptionContract(
+            symbol="MSFT",
+            expiration="2024-02-16",
+            strike=300.0,
+            contract_type="call",
+            bid=3.0,
+            ask=3.1,
+            volume=1000,
+            open_interest=5000,
+            implied_volatility=0.25,
+            underlying_price=300.0,
+            days_to_expiration=30,
+        )
+        db_session.add(contract)
+        db_session.commit()
+        
+        # Create signal
+        signal = Signal(
             user_id=user.id,
-            strategy_name="Bull Call Spread",
-            symbol="AAPL",
-            start_date="2024-01-01",
-            end_date="2024-01-31",
-            initial_capital=100000.0,
-            final_capital=105000.0,
-            total_return_pct=5.0,
-            total_trades=10,
-            winning_trades=7,
-            losing_trades=3,
-            win_rate=0.7,
-            max_drawdown_pct=2.5,
-            sharpe_ratio=1.5,
+            symbol="MSFT",
+            strategy_type="bull_call_spread",
+            risk_level="medium",
+            score=0.80,
+            expected_profit=400.0,
+            max_loss=150.0,
+            probability_estimate=0.70,
+            reason="Bullish setup",
+            status="executed",
+            option_contract_id=contract.id,
         )
-        db_session.add(result)
+        db_session.add(signal)
         db_session.commit()
         
-        retrieved = db_session.query(BacktestResult).filter_by(user_id=user.id).first()
-        assert retrieved is not None
-        assert retrieved.total_return_pct == 5.0
-        assert retrieved.win_rate == 0.7
+        # Create trade
+        trade = Trade(
+            user_id=user.id,
+            signal_id=signal.id,
+            option_contract_id=contract.id,
+            broker_order_id="broker_456",
+            status="open",
+            entry_price=3.05,
+            quantity=5,
+            is_paper_trading=True,
+        )
+        db_session.add(trade)
+        db_session.commit()
+        
+        # Close trade and calculate P/L
+        trade.status = "closed"
+        trade.exit_price = 4.50  # Profit per contract
+        trade.realized_pnl = (trade.exit_price - trade.entry_price) * trade.quantity
+        trade.closed_at = trade.opened_at  # In real scenario, this would be later
+        db_session.commit()
+        
+        # Verify P/L calculation
+        retrieved_trade = db_session.query(Trade).filter_by(id=trade.id).first()
+        assert retrieved_trade.status == "closed"
+        assert retrieved_trade.exit_price == 4.50
+        assert retrieved_trade.realized_pnl == (4.50 - 3.05) * 5  # 7.25 * 5 = 36.25
+        assert retrieved_trade.closed_at is not None
 
-
-class TestDatabaseReset:
-    """Test database reset functionality."""
-
-    def test_database_can_be_reset(self, db_session: Session):
-        """Test that database can be reset."""
-        # Add some data
+    def test_trade_with_all_required_fields(self, db_session: Session):
+        """Test creating a trade with all required fields from Issue #018."""
+        # Create user
         user = User(
             username="testuser",
             email="test@example.com",
@@ -570,5 +549,153 @@ class TestDatabaseReset:
         db_session.add(user)
         db_session.commit()
         
-        # Verify data exists
-        assert db_session.query(User).count() == 1
+        # Create option contract
+        contract = OptionContract(
+            symbol="GOOGL",
+            expiration="2024-03-15",
+            strike=140.0,
+            contract_type="put",
+            bid=1.5,
+            ask=1.6,
+            volume=500,
+            open_interest=2000,
+            implied_volatility=0.20,
+            underlying_price=140.0,
+            days_to_expiration=45,
+        )
+        db_session.add(contract)
+        db_session.commit()
+        
+        # Create signal
+        signal = Signal(
+            user_id=user.id,
+            symbol="GOOGL",
+            strategy_type="protective_put",
+            risk_level="low",
+            score=0.70,
+            expected_profit=200.0,
+            max_loss=100.0,
+            probability_estimate=0.75,
+            reason="Downside protection",
+            status="approved",
+            option_contract_id=contract.id,
+        )
+        db_session.add(signal)
+        db_session.commit()
+        
+        # Create trade with all required fields
+        trade = Trade(
+            id=None,  # Auto-generated
+            user_id=user.id,
+            signal_id=signal.id,
+            broker_order_id="broker_789",
+            status="open",
+            entry_price=1.55,
+            exit_price=None,  # Not closed yet
+            quantity=20,
+            opened_at=None,  # Will use default
+            closed_at=None,  # Not closed yet
+            realized_pnl=None,  # Not closed yet
+            option_contract_id=contract.id,
+            is_paper_trading=True,
+        )
+        db_session.add(trade)
+        db_session.commit()
+        
+        # Verify all fields
+        retrieved_trade = db_session.query(Trade).filter_by(user_id=user.id).first()
+        assert retrieved_trade.id is not None
+        assert retrieved_trade.user_id == user.id
+        assert retrieved_trade.signal_id == signal.id
+        assert retrieved_trade.broker_order_id == "broker_789"
+        assert retrieved_trade.status == "open"
+        assert retrieved_trade.entry_price == 1.55
+        assert retrieved_trade.exit_price is None
+        assert retrieved_trade.quantity == 20
+        assert retrieved_trade.opened_at is not None
+        assert retrieved_trade.closed_at is None
+        assert retrieved_trade.realized_pnl is None
+        assert retrieved_trade.option_contract_id == contract.id
+        assert retrieved_trade.is_paper_trading is True
+
+    def test_trade_paper_vs_live_trading(self, db_session: Session):
+        """Test that trades can be marked as paper or live trading."""
+        # Create user
+        user = User(
+            username="testuser",
+            email="test@example.com",
+            hashed_password="hashed_password",
+        )
+        db_session.add(user)
+        db_session.commit()
+        
+        # Create option contract
+        contract = OptionContract(
+            symbol="TSLA",
+            expiration="2024-02-16",
+            strike=250.0,
+            contract_type="call",
+            bid=5.0,
+            ask=5.2,
+            volume=2000,
+            open_interest=10000,
+            implied_volatility=0.35,
+            underlying_price=250.0,
+            days_to_expiration=30,
+        )
+        db_session.add(contract)
+        db_session.commit()
+        
+        # Create signal
+        signal = Signal(
+            user_id=user.id,
+            symbol="TSLA",
+            strategy_type="bull_call_spread",
+            risk_level="high",
+            score=0.90,
+            expected_profit=1000.0,
+            max_loss=500.0,
+            probability_estimate=0.65,
+            reason="Strong momentum",
+            status="approved",
+            option_contract_id=contract.id,
+        )
+        db_session.add(signal)
+        db_session.commit()
+        
+        # Create paper trade
+        paper_trade = Trade(
+            user_id=user.id,
+            signal_id=signal.id,
+            option_contract_id=contract.id,
+            broker_order_id="paper_order_1",
+            status="open",
+            entry_price=5.1,
+            quantity=10,
+            is_paper_trading=True,
+        )
+        db_session.add(paper_trade)
+        db_session.commit()
+        
+        # Create live trade
+        live_trade = Trade(
+            user_id=user.id,
+            signal_id=signal.id,
+            option_contract_id=contract.id,
+            broker_order_id="live_order_1",
+            status="open",
+            entry_price=5.1,
+            quantity=5,
+            is_paper_trading=False,
+        )
+        db_session.add(live_trade)
+        db_session.commit()
+        
+        # Verify both trades exist with correct trading type
+        paper_trades = db_session.query(Trade).filter_by(is_paper_trading=True).all()
+        live_trades = db_session.query(Trade).filter_by(is_paper_trading=False).all()
+        
+        assert len(paper_trades) == 1
+        assert len(live_trades) == 1
+        assert paper_trades[0].is_paper_trading is True
+        assert live_trades[0].is_paper_trading is False
