@@ -54,6 +54,7 @@ class Config:
     ALPHAVANTAGE_API_KEY: Optional[str] = os.getenv("ALPHAVANTAGE_API_KEY")
     POLYGON_API_KEY: Optional[str] = os.getenv("POLYGON_API_KEY")
     NEWS_API_KEY: Optional[str] = os.getenv("NEWS_API_KEY")
+    FINNHUB_API_KEY: Optional[str] = os.getenv("FINNHUB_API_KEY")
 
     # Data Provider Configuration
     DATA_PROVIDER: str = os.getenv("DATA_PROVIDER", "mock")  # "mock", "alphavantage", "yfinance", etc.
@@ -69,6 +70,15 @@ class Config:
     # Disable yfinance in production by default (can be overridden)
     if ENVIRONMENT == Environment.PROD:
         YFINANCE_ENABLED = os.getenv("YFINANCE_ENABLED", "False").lower() == "true"
+
+    # Finnhub Configuration
+    FINNHUB_ENABLED: bool = os.getenv("FINNHUB_ENABLED", "True").lower() == "true"
+    FINNHUB_RATE_LIMIT_CALLS_PER_SECOND: int = int(
+        os.getenv("FINNHUB_RATE_LIMIT_CALLS_PER_SECOND", "1")
+    )
+    FINNHUB_CACHE_TTL_SECONDS: int = int(
+        os.getenv("FINNHUB_CACHE_TTL_SECONDS", "300")
+    )
 
     # Paper Trading
     PAPER_TRADING_ENABLED: bool = os.getenv("PAPER_TRADING_ENABLED", "True").lower() == "true"
@@ -86,6 +96,7 @@ class Config:
     DATA_REFRESH_INTERVAL_SECONDS: int = int(os.getenv("DATA_REFRESH_INTERVAL_SECONDS", "300"))  # 5 minutes
     SIGNAL_GENERATION_INTERVAL_SECONDS: int = int(os.getenv("SIGNAL_GENERATION_INTERVAL_SECONDS", "600"))  # 10 minutes
     TRADE_MONITORING_INTERVAL_SECONDS: int = int(os.getenv("TRADE_MONITORING_INTERVAL_SECONDS", "60"))  # 1 minute
+    NEWS_FETCH_INTERVAL_SECONDS: int = int(os.getenv("NEWS_FETCH_INTERVAL_SECONDS", "1800"))  # 30 minutes
 
     @classmethod
     def is_dev(cls) -> bool:

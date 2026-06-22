@@ -7,8 +7,14 @@ from typing import Optional
 from app.core.celery import celery_app
 from app.core.config import config
 from app.core.database import SessionLocal
-from app.data_sources import DataProvider, MockDataProvider, AlphaVantageProvider, YfinanceProvider
-from app.models.database import Signal, Trade, OptionContract
+from app.data_sources import (
+    DataProvider,
+    MockDataProvider,
+    AlphaVantageProvider,
+    YfinanceProvider,
+    FinnhubProvider,
+)
+from app.models.database import Signal, Trade, OptionContract, NewsArticle
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +53,21 @@ def get_data_provider() -> DataProvider:
                     logger.info("Initialized YfinanceProvider for background tasks")
                 except ImportError as e:
                     logger.warning(f"Failed to initialize YfinanceProvider: {e}. Falling back to MockDataProvider.")
+                    _data_provider = MockDataProvider()
+        elif provider_name == "finnhub":
+            if not config.FINNHUB_ENABLED:
+                logger.warning("Finnhub provider requested but disabled in config. Falling back to MockDataProvider.")
+                _data_provider = MockDataProvider()
+            else:
+                try:
+                    _data_provider = FinnhubProvider(
+                        api_key=config.FINNHUB_API_KEY,
+                        rate_limit_calls_per_second=config.FINNHUB_RATE_LIMIT_CALLS_PER_SECOND,
+                        cache_ttl_seconds=config.FINNHUB_CACHE_TTL_SECONDS,
+                    )
+                    logger.info("Initialized FinnhubProvider for background tasks")
+                except ValueError as e:
+                    logger.warning(f"Failed to initialize FinnhubProvider: {e}. Falling back to MockDataProvider.")
                     _data_provider = MockDataProvider()
         else:
             # Default to mock provider
@@ -111,6 +132,100 @@ def refresh_market_data(self, watchlist_id: Optional[int] = None) -> dict:
             
     except Exception as exc:
         logger.error(f"Market data refresh failed: {exc}", exc_info=True)
+        # Retry with exponential backoff
+        raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
+
+
+@celery_app.task(
+    name="app.workers.tasks.fetch_news",
+    bind=True,
+    max_retries=3,
+    default_retry_delay=60,
+)
+def fetch_news(self, symbol: Optional[str] = None, limit: int = 10) -> dict:
+    """Fetch and store news articles for symbols.
+    
+    Fetches news from the configured data provider and stores articles in the database.
+    Automatically deduplicates articles by URL.
+    
+    Args:
+        symbol: Optional specific symbol to fetch news for. If None, fetch for all watched symbols.
+        limit: Maximum number of articles to fetch per symbol
+        
+    Returns:
+        Dictionary with fetch results
+    """
+    try:
+        logger.info(f"Starting news fetch for symbol={symbol}, limit={limit}")
+        
+        db = SessionLocal()
+        provider = get_data_provider()
+        
+        try:
+            symbols_to_fetch = [symbol] if symbol else ["AAPL", "MSFT", "GOOGL", "TSLA", "AMZN"]
+            articles_fetched = 0
+            articles_stored = 0
+            articles_duplicated = 0
+            
+            for sym in symbols_to_fetch:
+                try:
+                    # Fetch news from provider
+                    articles = provider.get_news(sym, limit=limit)
+                    articles_fetched += len(articles)
+                    
+                    # Store articles in database with deduplication
+                    for article in articles:
+                        try:
+                            # Check if article already exists by URL
+                            if article.url:
+                                existing = db.query(NewsArticle).filter(
+                                    NewsArticle.url == article.url
+                                ).first()
+                                
+                                if existing:
+                                    logger.debug(f"Skipping duplicate article: {article.url}")
+                                    articles_duplicated += 1
+                                    continue
+                            
+                            # Store new article
+                            db_article = NewsArticle(
+                                symbol=article.symbol,
+                                title=article.title,
+                                description=article.description,
+                                url=article.url,
+                                source=article.source,
+                                published_at=article.published_at,
+                                sentiment=article.sentiment,
+                                provider=provider.__class__.__name__,
+                            )
+                            db.add(db_article)
+                            articles_stored += 1
+                        except Exception as e:
+                            logger.warning(f"Error storing article for {sym}: {e}")
+                            continue
+                    
+                    db.commit()
+                    
+                except Exception as e:
+                    logger.warning(f"Error fetching news for {sym}: {e}")
+                    continue
+            
+            result = {
+                "status": "success",
+                "symbol": symbol,
+                "timestamp": datetime.utcnow().isoformat(),
+                "articles_fetched": articles_fetched,
+                "articles_stored": articles_stored,
+                "articles_duplicated": articles_duplicated,
+                "provider": provider.__class__.__name__,
+            }
+            logger.info(f"News fetch completed: {result}")
+            return result
+        finally:
+            db.close()
+            
+    except Exception as exc:
+        logger.error(f"News fetch failed: {exc}", exc_info=True)
         # Retry with exponential backoff
         raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
 

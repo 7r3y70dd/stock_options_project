@@ -16,6 +16,7 @@ from sqlalchemy import (
     String,
     Text,
     Enum as SQLEnum,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import relationship
 
@@ -102,6 +103,28 @@ class OptionContract(Base):
     # Relationships
     trades = relationship("Trade", back_populates="option_contract")
     signals = relationship("Signal", back_populates="option_contract")
+
+
+class NewsArticle(Base):
+    """News article model."""
+
+    __tablename__ = "news_articles"
+
+    id = Column(Integer, primary_key=True, index=True)
+    symbol = Column(String(20), nullable=False, index=True)
+    title = Column(String(500), nullable=False)
+    description = Column(Text, nullable=True)
+    url = Column(String(2048), nullable=True, unique=True, index=True)  # URL is unique to prevent duplicates
+    source = Column(String(255), nullable=True)
+    published_at = Column(DateTime, nullable=True, index=True)
+    sentiment = Column(String(20), nullable=True)  # "positive", "negative", "neutral"
+    fetched_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    provider = Column(String(50), nullable=False)  # "finnhub", "alpha_vantage", "yfinance", etc.
+
+    # Unique constraint: same URL should not be stored twice
+    __table_args__ = (
+        UniqueConstraint('url', name='uq_news_articles_url'),
+    )
 
 
 class Signal(Base):

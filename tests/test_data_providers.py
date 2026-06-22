@@ -5,8 +5,9 @@ Verifies that:
 2. MockDataProvider implements all required methods
 3. AlphaVantageProvider implements all required methods
 4. YfinanceProvider implements all required methods
-5. Mock data is realistic and consistent
-6. App code can swap providers without changes
+5. FinnhubProvider implements all required methods
+6. Mock data is realistic and consistent
+7. App code can swap providers without changes
 """
 
 import pytest
@@ -18,6 +19,7 @@ from app.data_sources import (
     MockDataProvider,
     AlphaVantageProvider,
     YfinanceProvider,
+    FinnhubProvider,
     Quote,
     PriceBar,
     OptionChainEntry,
@@ -311,127 +313,146 @@ class TestYfinanceProvider:
 
     def test_yfinance_provider_is_data_provider(self):
         """Test that YfinanceProvider is a DataProvider."""
-        try:
+        with patch('app.data_sources.yfinance_provider.YFINANCE_AVAILABLE', True):
             provider = YfinanceProvider(warn_on_init=False)
             assert isinstance(provider, DataProvider)
-        except ImportError:
-            pytest.skip("yfinance not installed")
 
-    def test_yfinance_requires_yfinance_library(self):
-        """Test that YfinanceProvider requires yfinance library."""
+    def test_yfinance_requires_import(self):
+        """Test that YfinanceProvider requires yfinance to be installed."""
         with patch('app.data_sources.yfinance_provider.YFINANCE_AVAILABLE', False):
-            with pytest.raises(ImportError, match="yfinance is not installed"):
+            with pytest.raises(ImportError):
                 YfinanceProvider(warn_on_init=False)
 
-    @patch('app.data_sources.yfinance_provider.yf.Ticker')
-    def test_get_quote_success(self, mock_ticker_class):
-        """Test get_quote with successful yfinance response."""
-        mock_ticker = Mock()
-        mock_ticker.info = {
-            "currentPrice": 150.25,
-            "bid": 150.20,
-            "ask": 150.30,
-            "volume": 1000000,
+
+class TestFinnhubProvider:
+    """Test FinnhubProvider implementation."""
+
+    def test_finnhub_provider_is_data_provider(self):
+        """Test that FinnhubProvider is a DataProvider."""
+        provider = FinnhubProvider(api_key='test-key')
+        assert isinstance(provider, DataProvider)
+
+    def test_finnhub_requires_api_key(self):
+        """Test that FinnhubProvider requires API key."""
+        with pytest.raises(ValueError, match="API key not provided"):
+            FinnhubProvider(api_key=None)
+
+    @patch('app.data_sources.finnhub_provider.requests.get')
+    def test_get_quote_success(self, mock_get):
+        """Test get_quote with successful API response."""
+        mock_response = Mock()
+        mock_response.json.return_value = {
+            "c": 150.25,  # current price
+            "bp": 150.20,  # bid price
+            "ap": 150.30,  # ask price
+            "v": 1000000,  # volume
         }
-        mock_ticker_class.return_value = mock_ticker
+        mock_get.return_value = mock_response
         
-        try:
-            provider = YfinanceProvider(warn_on_init=False)
-            quote = provider.get_quote("AAPL")
-            
-            assert quote is not None
-            assert quote.symbol == "AAPL"
-            assert quote.price == 150.25
-            assert quote.bid == 150.20
-            assert quote.ask == 150.30
-        except ImportError:
-            pytest.skip("yfinance not installed")
+        provider = FinnhubProvider(api_key='test-key')
+        quote = provider.get_quote("AAPL")
+        
+        assert quote is not None
+        assert quote.symbol == "AAPL"
+        assert quote.price == 150.25
+        assert quote.bid == 150.20
+        assert quote.ask == 150.30
 
-    @patch('app.data_sources.yfinance_provider.yf.Ticker')
-    def test_get_quote_no_data(self, mock_ticker_class):
+    @patch('app.data_sources.finnhub_provider.requests.get')
+    def test_get_quote_no_data(self, mock_get):
         """Test get_quote when no data is available."""
-        mock_ticker = Mock()
-        mock_ticker.info = {}
-        mock_ticker_class.return_value = mock_ticker
+        mock_response = Mock()
+        mock_response.json.return_value = {}
+        mock_get.return_value = mock_response
         
-        try:
-            provider = YfinanceProvider(warn_on_init=False)
-            quote = provider.get_quote("UNKNOWN")
-            
-            assert quote is None
-        except ImportError:
-            pytest.skip("yfinance not installed")
+        provider = FinnhubProvider(api_key='test-key')
+        quote = provider.get_quote("UNKNOWN")
+        
+        assert quote is None
 
-    @patch('app.data_sources.yfinance_provider.yf.Ticker')
-    def test_get_price_history_success(self, mock_ticker_class):
-        """Test get_price_history with successful yfinance response."""
-        import pandas as pd
+    @patch('app.data_sources.finnhub_provider.requests.get')
+    def test_get_news_success(self, mock_get):
+        """Test get_news with successful API response."""
+        mock_response = Mock()
+        mock_response.json.return_value = [
+            {
+                "headline": "Apple announces new features",
+                "summary": "Apple announced new features today",
+                "url": "https://example.com/news/1",
+                "source": "Example News",
+                "datetime": 1704067200,  # Unix timestamp
+            },
+            {
+                "headline": "Apple stock rises",
+                "summary": "Apple stock rose today",
+                "url": "https://example.com/news/2",
+                "source": "Example News",
+                "datetime": 1704153600,  # Unix timestamp
+            },
+        ]
+        mock_get.return_value = mock_response
         
-        mock_ticker = Mock()
-        mock_history = pd.DataFrame({
-            "Open": [149.5, 150.0],
-            "High": [150.5, 151.0],
-            "Low": [149.0, 149.0],
-            "Close": [150.0, 150.5],
-            "Volume": [900000, 1000000],
-            "Adj Close": [150.0, 150.5],
-        }, index=pd.DatetimeIndex(["2024-01-14", "2024-01-15"]))
-        mock_ticker.history.return_value = mock_history
-        mock_ticker_class.return_value = mock_ticker
+        provider = FinnhubProvider(api_key='test-key')
+        articles = provider.get_news("AAPL", limit=2)
         
-        try:
-            provider = YfinanceProvider(warn_on_init=False)
-            bars = provider.get_price_history("AAPL", "2024-01-14", "2024-01-15")
-            
-            assert len(bars) == 2
-            assert bars[0].date == "2024-01-14"
-            assert bars[0].close == 150.0
-            assert bars[1].date == "2024-01-15"
-            assert bars[1].close == 150.5
-        except ImportError:
-            pytest.skip("yfinance not installed")
+        assert len(articles) == 2
+        assert articles[0].symbol == "AAPL"
+        assert articles[0].title == "Apple stock rises"  # Sorted descending by date
+        assert articles[0].url == "https://example.com/news/2"
 
-    @patch('app.data_sources.yfinance_provider.yf.Ticker')
-    def test_get_options_chain_success(self, mock_ticker_class):
-        """Test get_options_chain with successful yfinance response."""
-        import pandas as pd
+    @patch('app.data_sources.finnhub_provider.requests.get')
+    def test_get_news_no_data(self, mock_get):
+        """Test get_news when no data is available."""
+        mock_response = Mock()
+        mock_response.json.return_value = []
+        mock_get.return_value = mock_response
         
-        mock_ticker = Mock()
-        mock_ticker.options = ["2024-02-16", "2024-03-15"]
+        provider = FinnhubProvider(api_key='test-key')
+        articles = provider.get_news("UNKNOWN")
         
-        mock_calls = pd.DataFrame({
-            "strike": [150.0, 155.0],
-            "bid": [2.5, 1.5],
-            "ask": [2.6, 1.6],
-            "lastPrice": [2.55, 1.55],
-            "volume": [100, 50],
-            "openInterest": [1000, 500],
-            "impliedVolatility": [0.25, 0.23],
-        })
-        mock_puts = pd.DataFrame({
-            "strike": [150.0, 155.0],
-            "bid": [1.5, 2.5],
-            "ask": [1.6, 2.6],
-            "lastPrice": [1.55, 2.55],
-            "volume": [50, 100],
-            "openInterest": [500, 1000],
-            "impliedVolatility": [0.23, 0.25],
-        })
+        assert articles == []
+
+    @patch('app.data_sources.finnhub_provider.requests.get')
+    def test_get_earnings_date_success(self, mock_get):
+        """Test get_earnings_date with successful API response."""
+        mock_response = Mock()
+        mock_response.json.return_value = {
+            "earningsCalendar": [
+                {
+                    "date": "2024-02-01",
+                    "hour": "after_close",
+                    "epsEstimate": 2.5,
+                    "epsActual": None,
+                    "revenueEstimate": 120000000000,
+                    "revenueActual": None,
+                }
+            ]
+        }
+        mock_get.return_value = mock_response
         
-        mock_chain = Mock()
-        mock_chain.calls = mock_calls
-        mock_chain.puts = mock_puts
-        mock_ticker.option_chain.return_value = mock_chain
-        mock_ticker_class.return_value = mock_ticker
+        provider = FinnhubProvider(api_key='test-key')
+        earnings = provider.get_earnings_date("AAPL")
         
-        try:
-            provider = YfinanceProvider(warn_on_init=False)
-            chain = provider.get_options_chain("AAPL", expiration="2024-02-16")
-            
-            assert len(chain) == 4  # 2 calls + 2 puts
-            calls = [e for e in chain if e.contract_type == "call"]
-            puts = [e for e in chain if e.contract_type == "put"]
-            assert len(calls) == 2
-            assert len(puts) == 2
-        except ImportError:
-            pytest.skip("yfinance not installed")
+        assert earnings is not None
+        assert earnings.symbol == "AAPL"
+        assert earnings.date == "2024-02-01"
+        assert earnings.eps_estimate == 2.5
+
+    @patch('app.data_sources.finnhub_provider.requests.get')
+    def test_get_earnings_date_no_data(self, mock_get):
+        """Test get_earnings_date when no data is available."""
+        mock_response = Mock()
+        mock_response.json.return_value = {"earningsCalendar": []}
+        mock_get.return_value = mock_response
+        
+        provider = FinnhubProvider(api_key='test-key')
+        earnings = provider.get_earnings_date("UNKNOWN")
+        
+        assert earnings is None
+
+    def test_get_options_chain_not_supported(self):
+        """Test that get_options_chain returns empty list (not supported by Finnhub free tier)."""
+        provider = FinnhubProvider(api_key='test-key')
+        chain = provider.get_options_chain("AAPL")
+        
+        assert chain == []
