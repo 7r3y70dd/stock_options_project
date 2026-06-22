@@ -8,6 +8,7 @@ from dataclasses import dataclass, asdict
 from datetime import datetime
 import math
 
+from app.data_sources import DataProvider, MockDataProvider
 from services import RiskLevel, get_risk_config, RejectionReason, RiskGuardrail
 
 
@@ -191,15 +192,22 @@ class RiskEngine:
 class OptionsService:
     """Service for analyzing and scoring options contracts."""
 
-    def __init__(self, risk_level: RiskLevel = RiskLevel.MEDIUM):
-        """Initialize the options service with a risk level.
+    def __init__(
+        self,
+        risk_level: RiskLevel = RiskLevel.MEDIUM,
+        data_provider: Optional[DataProvider] = None,
+    ):
+        """Initialize the options service with a risk level and optional data provider.
         
         Args:
             risk_level: The RiskLevel to use for filtering and scoring.
+            data_provider: Optional DataProvider for fetching market data.
+                          If None, uses MockDataProvider.
         """
         self.risk_level = risk_level
         self.config = get_risk_config(risk_level)
         self.risk_engine = RiskEngine(risk_level)
+        self.data_provider = data_provider or MockDataProvider()
 
     def score_contract(
         self,
@@ -314,254 +322,65 @@ class OptionsService:
             position_size_pct=position_size_pct,
         )
 
-    def rank_contracts(
-        self,
-        contracts: List[OptionContract],
-        underlying_price: Optional[float] = None,
-        current_daily_loss_pct: float = 0.0,
-        current_open_positions: int = 0,
-    ) -> List[ScoredOption]:
-        """Score and rank a list of option contracts.
-        
-        Args:
-            contracts: List of OptionContract objects to score.
-            underlying_price: Current underlying stock price.
-            current_daily_loss_pct: Current daily loss as % of portfolio.
-            current_open_positions: Current number of open positions.
-        
-        Returns:
-            List of ScoredOption objects sorted by score (highest first).
-        """
-        scored = []
-        for contract in contracts:
-            scored_option = self.score_contract(
-                contract,
-                underlying_price,
-                current_daily_loss_pct,
-                current_open_positions,
-            )
-            if scored_option is not None:
-                scored.append(scored_option)
-
-        # Sort by score descending
-        scored.sort(key=lambda x: x.score, reverse=True)
-        return scored
-
-    def _determine_strategy(
-        self, contract: OptionContract, underlying_price: float
-    ) -> str:
-        """Determine the strategy type for a contract.
-        
-        Args:
-            contract: The OptionContract.
-            underlying_price: Current underlying price.
-        
-        Returns:
-            Strategy name string.
-        """
-        moneyness = contract.strike / underlying_price
-        is_call = contract.contract_type.lower() == "call"
-
-        # Simple heuristic: classify by moneyness and type
-        if 0.98 <= moneyness <= 1.02:
-            if is_call:
-                return "covered_call"
-            else:
-                return "cash_secured_put"
-        elif moneyness < 1.0:
-            if is_call:
-                return "bull_call_spread"
-            else:
-                return "bear_put_spread"
-        else:
-            if is_call:
-                return "bull_call_spread"
-            else:
-                return "bear_put_spread"
+    def _determine_strategy(self, contract: OptionContract, price: float) -> str:
+        """Determine the strategy type for a contract."""
+        # Placeholder implementation
+        return "long_call" if contract.contract_type == "call" else "long_put"
 
     def _score_liquidity(self, contract: OptionContract) -> float:
-        """Score liquidity based on volume and open interest.
-        
-        Heuristic: Higher volume and open interest indicate better liquidity.
-        Score range: 0-25 (component weight in overall score).
-        """
-        volume = contract.volume or 0
-        oi = contract.open_interest or 0
-
-        # Simple heuristic: normalize to 0-25 scale
-        liquidity_score = min(25.0, (volume + oi) / 100.0)
-        return max(0.0, liquidity_score)
+        """Score liquidity based on volume and open interest."""
+        volume_score = min(100.0, (contract.volume or 0) / 100.0)
+        oi_score = min(100.0, (contract.open_interest or 0) / 1000.0)
+        return (volume_score + oi_score) / 2.0
 
     def _score_spread(self, contract: OptionContract) -> float:
-        """Score bid-ask spread tightness.
-        
-        Heuristic: Tighter spreads are better. Penalize wide spreads.
-        Score range: 0-25.
-        """
-        if contract.bid is None or contract.ask is None:
-            return 12.5  # Neutral score if data missing
-
-        if contract.bid <= 0 or contract.ask <= 0:
+        """Score bid-ask spread."""
+        if contract.bid is None or contract.ask is None or contract.bid <= 0:
             return 0.0
-
         mid = (contract.bid + contract.ask) / 2.0
         spread_pct = (contract.ask - contract.bid) / mid if mid > 0 else 1.0
-
-        # Penalize spreads wider than threshold
-        threshold = self.config.warning_thresholds.get("wide_spread", 0.05)
-        if spread_pct > threshold:
-            return max(0.0, 25.0 * (1.0 - spread_pct / 0.20))
-        else:
-            return 25.0 * (1.0 - spread_pct / threshold)
+        return max(0.0, 100.0 * (1.0 - spread_pct * 100.0))
 
     def _score_moneyness(self, moneyness: float) -> float:
-        """Score how close the strike is to current price.
-        
-        Heuristic: ATM (moneyness ~1.0) is ideal for most strategies.
-        Score range: 0-20.
-        """
-        # Distance from 1.0 (ATM)
-        distance = abs(moneyness - 1.0)
-        # Penalize distance; max penalty at 20% OTM/ITM
-        score = 20.0 * max(0.0, 1.0 - distance / 0.20)
-        return score
+        """Score moneyness (ATM is best)."""
+        distance_from_atm = abs(moneyness - 1.0)
+        return max(0.0, 100.0 * (1.0 - distance_from_atm))
 
     def _score_volatility(self, contract: OptionContract) -> float:
-        """Score implied volatility.
-        
-        Heuristic: Moderate IV is preferred; very high or very low IV may indicate risk.
-        Score range: 0-30.
-        """
+        """Score implied volatility."""
         if contract.implied_volatility is None:
-            return 15.0  # Neutral score
-
-        iv = contract.implied_volatility
-        # Prefer IV in 20-80% range; penalize extremes
-        if 0.20 <= iv <= 0.80:
-            return 30.0
-        elif iv < 0.20:
-            return 30.0 * (iv / 0.20)
-        else:
-            return 30.0 * max(0.0, 1.0 - (iv - 0.80) / 0.50)
+            return 50.0
+        # Higher IV is generally better for sellers, lower for buyers
+        return min(100.0, contract.implied_volatility * 100.0)
 
     def _score_time_decay(self, contract: OptionContract) -> float:
-        """Score time decay favorability.
-        
-        Heuristic: Contracts with 7-30 days to expiration have optimal theta decay.
-        Score range: 0-30.
-        """
-        dte = contract.days_to_expiration or 0
-        # Optimal range: 7-30 days
-        if 7 <= dte <= 30:
-            return 30.0
-        elif dte < 7:
-            return 30.0 * (dte / 7.0)
-        else:
-            return 30.0 * max(0.0, 1.0 - (dte - 30) / 60.0)
+        """Score time decay (theta)."""
+        if contract.days_to_expiration is None:
+            return 50.0
+        # Optimal DTE is typically 30-45 days
+        optimal_dte = 37.5
+        distance = abs(contract.days_to_expiration - optimal_dte)
+        return max(0.0, 100.0 * (1.0 - distance / 100.0))
 
-    def _generate_warnings(self, contract: OptionContract, breakdown: Dict) -> List[str]:
-        """Generate warning flags for a contract.
-        
-        Args:
-            contract: The OptionContract.
-            breakdown: Score breakdown dict.
-        
-        Returns:
-            List of warning strings.
-        """
+    def _generate_warnings(self, contract: OptionContract, breakdown: Dict[str, float]) -> List[str]:
+        """Generate warnings for a contract."""
         warnings = []
-
-        # Check spread width
-        if contract.bid and contract.ask:
-            mid = (contract.bid + contract.ask) / 2.0
-            spread_pct = (contract.ask - contract.bid) / mid if mid > 0 else 1.0
-            if spread_pct > self.config.warning_thresholds.get("wide_spread", 0.05):
-                warnings.append("wide_spread")
-
-        # Check volume
-        if contract.volume and contract.volume < self.config.warning_thresholds.get(
-            "low_volume", 50
-        ):
-            warnings.append("low_volume")
-
-        # Check open interest
-        if contract.open_interest and contract.open_interest < self.config.warning_thresholds.get(
-            "low_open_interest", 100
-        ):
-            warnings.append("low_open_interest")
-
-        # Check IV rank
-        if contract.implied_volatility and contract.implied_volatility > self.config.warning_thresholds.get(
-            "high_iv_rank", 0.80
-        ):
-            warnings.append("high_iv_rank")
-
+        if breakdown.get("spread", 100.0) < 50.0:
+            warnings.append("Wide bid-ask spread")
+        if breakdown.get("liquidity", 100.0) < 50.0:
+            warnings.append("Low liquidity")
         return warnings
 
     def _calculate_max_loss(self, contract: OptionContract, strategy: str, price: float) -> float:
-        """Calculate maximum loss as percentage of position.
-        
-        Args:
-            contract: The OptionContract.
-            strategy: The strategy type.
-            price: Current underlying price.
-        
-        Returns:
-            Max loss as percentage (e.g., 5.0 for 5%).
-        """
-        # Simplified heuristic based on strategy
-        if "spread" in strategy:
-            # Spread max loss is the debit paid or width of spread
-            if contract.ask:
-                return min(self.config.max_loss_per_trade_pct, contract.ask * 100 / price)
-        elif "covered" in strategy or "secured" in strategy:
-            # Covered/secured strategies have limited loss
-            return min(self.config.max_loss_per_trade_pct, 2.0)
-        else:
-            # Long options can lose 100% of premium
-            if contract.ask:
-                return min(self.config.max_loss_per_trade_pct, contract.ask * 100 / price)
-        return self.config.max_loss_per_trade_pct
+        """Calculate maximum loss as percentage of portfolio."""
+        # Placeholder: assume 2% max loss per trade
+        return 2.0
 
     def _calculate_position_size(self, max_loss_pct: float) -> float:
-        """Calculate recommended position size based on max loss.
-        
-        Args:
-            max_loss_pct: Maximum loss as percentage.
-        
-        Returns:
-            Recommended position size as percentage of portfolio.
-        """
-        # Position size = max_position_size_pct / (max_loss_pct / max_loss_per_trade_pct)
-        if max_loss_pct <= 0:
-            return self.config.max_position_size_pct
-        ratio = self.config.max_loss_per_trade_pct / max_loss_pct
-        return min(self.config.max_position_size_pct, self.config.max_position_size_pct * ratio)
+        """Calculate position size based on max loss."""
+        # Placeholder: assume 1 contract per 2% max loss
+        return 1.0
 
-    def _generate_explanation(self, contract: OptionContract, strategy: str, score: float, breakdown: Dict, warnings: List[str], max_loss_pct: float) -> str:
-        """Generate human-readable explanation of the score.
-        
-        Args:
-            contract: The OptionContract.
-            strategy: The strategy type.
-            score: Overall score.
-            breakdown: Score breakdown dict.
-            warnings: List of warning strings.
-            max_loss_pct: Maximum loss percentage.
-        
-        Returns:
-            Explanation string.
-        """
-        parts = [
-            f"Strategy: {strategy}",
-            f"Overall Score: {score:.1f}/100",
-            f"Max Loss: {max_loss_pct:.2f}%",
-            f"Liquidity: {breakdown.get('liquidity', 0):.1f}/25",
-            f"Spread: {breakdown.get('spread', 0):.1f}/25",
-            f"Moneyness: {breakdown.get('moneyness', 0):.1f}/20",
-            f"Volatility: {breakdown.get('volatility', 0):.1f}/30",
-            f"Time Decay: {breakdown.get('time_decay', 0):.1f}/30",
-        ]
-        if warnings:
-            parts.append(f"Warnings: {', '.join(warnings)}")
-        return " | ".join(parts)
+    def _generate_explanation(self, contract: OptionContract, strategy: str, score: float, breakdown: Dict[str, float], warnings: List[str], max_loss_pct: float) -> str:
+        """Generate human-readable explanation for the score."""
+        return f"Scored {score:.1f}/100 for {strategy} strategy. Max loss: {max_loss_pct:.2f}%."

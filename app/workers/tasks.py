@@ -7,9 +7,38 @@ from typing import Optional
 from app.core.celery import celery_app
 from app.core.config import config
 from app.core.database import SessionLocal
+from app.data_sources import DataProvider, MockDataProvider
 from app.models.database import Signal, Trade, OptionContract
 
 logger = logging.getLogger(__name__)
+
+# Initialize default data provider (mock for now, can be swapped)
+_data_provider: Optional[DataProvider] = None
+
+
+def get_data_provider() -> DataProvider:
+    """Get or initialize the data provider.
+    
+    Returns:
+        DataProvider instance
+    """
+    global _data_provider
+    if _data_provider is None:
+        # Use mock provider by default; can be swapped for real providers
+        _data_provider = MockDataProvider()
+        logger.info("Initialized MockDataProvider for background tasks")
+    return _data_provider
+
+
+def set_data_provider(provider: DataProvider) -> None:
+    """Set the data provider for background tasks.
+    
+    Args:
+        provider: DataProvider instance to use
+    """
+    global _data_provider
+    _data_provider = provider
+    logger.info(f"Data provider set to {provider.__class__.__name__}")
 
 
 @celery_app.task(
@@ -31,14 +60,23 @@ def refresh_market_data(self, watchlist_id: Optional[int] = None) -> dict:
         logger.info(f"Starting market data refresh for watchlist_id={watchlist_id}")
         
         db = SessionLocal()
+        provider = get_data_provider()
+        
         try:
-            # TODO: Implement actual market data fetching from data_sources
-            # This is a placeholder for the actual implementation
+            # TODO: Fetch watchlist symbols and update market data using provider
+            # Example:
+            # - Get symbols from watchlist
+            # - Call provider.get_quote(symbol) for each
+            # - Store quotes in database
+            # - Call provider.get_options_chain(symbol) for options data
+            # - Update OptionContract records
+            
             result = {
                 "status": "success",
                 "watchlist_id": watchlist_id,
                 "timestamp": datetime.utcnow().isoformat(),
                 "symbols_updated": 0,
+                "provider": provider.__class__.__name__,
             }
             logger.info(f"Market data refresh completed: {result}")
             return result
@@ -70,14 +108,23 @@ def generate_signals(self, user_id: Optional[int] = None) -> dict:
         logger.info(f"Starting signal generation for user_id={user_id}")
         
         db = SessionLocal()
+        provider = get_data_provider()
+        
         try:
-            # TODO: Implement actual signal generation logic from strategies
-            # This is a placeholder for the actual implementation
+            # TODO: Implement actual signal generation logic
+            # Example:
+            # - Get user watchlists and symbols
+            # - Call provider.get_price_history() for technical analysis
+            # - Call provider.get_news() for sentiment analysis
+            # - Generate signals based on strategies
+            # - Store Signal records in database
+            
             result = {
                 "status": "success",
                 "user_id": user_id,
                 "timestamp": datetime.utcnow().isoformat(),
                 "signals_generated": 0,
+                "provider": provider.__class__.__name__,
             }
             logger.info(f"Signal generation completed: {result}")
             return result
@@ -109,15 +156,25 @@ def monitor_trades(self, user_id: Optional[int] = None) -> dict:
         logger.info(f"Starting trade monitoring for user_id={user_id}")
         
         db = SessionLocal()
+        provider = get_data_provider()
+        
         try:
             # TODO: Implement actual trade monitoring logic
-            # This is a placeholder for the actual implementation
+            # Example:
+            # - Get open trades for user
+            # - Call provider.get_quote() for current prices
+            # - Calculate P&L
+            # - Check stop-loss and take-profit levels
+            # - Close trades if needed
+            # - Update Trade records in database
+            
             result = {
                 "status": "success",
                 "user_id": user_id,
                 "timestamp": datetime.utcnow().isoformat(),
                 "trades_monitored": 0,
                 "trades_closed": 0,
+                "provider": provider.__class__.__name__,
             }
             logger.info(f"Trade monitoring completed: {result}")
             return result
