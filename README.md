@@ -88,7 +88,7 @@ The MVP defines a complete user journey from authentication through paper trade 
 ### Screen Definitions
 
 | Screen | Purpose | User Input | App Output |
-|--------|---------|-----------|------------|
+|--------|---------|-----------|------------||
 | 1. Login | Authenticate user and establish session | Email/password | Session token; redirect to watchlist |
 | 2. Watchlist Selection | User selects which stocks to analyze | Choose symbols from saved list or add new | Selected watchlist symbols |
 | 3. Risk Level Selection | User defines risk tolerance for scoring | Select Low / Medium / High | Risk profile stored for scoring |
@@ -121,6 +121,14 @@ Focuses on defined-risk or asset-backed strategies such as:
 
 **Estimated Downside**: Max loss is capped by the strategy structure (e.g., premium received for covered calls).
 
+**Concrete Filters**:
+- Allowed strategies: covered calls, cash-secured puts, defined-risk spreads only
+- Max position size: 5% of portfolio
+- Max loss per trade: 2% of portfolio
+- Expiration window: 7–60 days
+- Strike selection: Near-the-money only (0.95–1.05 moneyness)
+- Min liquidity score: 70/100
+
 ### Medium Risk
 
 Allows more directional exposure and moderate risk, such as:
@@ -133,6 +141,14 @@ Allows more directional exposure and moderate risk, such as:
 
 **Estimated Downside**: Max loss is defined by the spread width or debit paid; users should size positions accordingly.
 
+**Concrete Filters**:
+- Allowed strategies: covered calls, cash-secured puts, spreads, earnings-aware trades
+- Max position size: 10% of portfolio
+- Max loss per trade: 5% of portfolio
+- Expiration window: 3–90 days
+- Strike selection: Slightly wider range (0.90–1.10 moneyness)
+- Min liquidity score: 50/100
+
 ### High Risk
 
 Allows more aggressive trades, such as:
@@ -142,8 +158,74 @@ Allows more aggressive trades, such as:
 - Shorter expiration contracts
 - Higher volatility opportunities
 - Larger potential reward with higher probability of loss
+- **Note**: No naked short calls (unlimited risk strategies are excluded)
 
-**Estimated Downside**: Max loss can be substantial (up to 100% of premium paid for long options). High-risk mode avoids unlimited-risk strategies like naked short calls.
+**Estimated Downside**: Max loss can be substantial (up to 100% of premium paid for long options).
+
+**Concrete Filters**:
+- Allowed strategies: long calls, long puts, short-duration trades, high-IV opportunities (but no naked short calls)
+- Max position size: 15% of portfolio
+- Max loss per trade: 10% of portfolio
+- Expiration window: 1–120 days
+- Strike selection: Wider range for directional plays (0.80–1.20 moneyness)
+- Min liquidity score: 30/100
+
+## Risk Level Implementation
+
+This section documents how risk levels are implemented in the service layer and how they affect strategy filtering, scoring, and position sizing.
+
+### Risk Level Configuration
+
+Each risk level is defined by a `RiskLevelConfig` object in `services/__init__.py` that specifies:
+
+1. **Allowed Strategies**: List of strategy types permitted at this risk level
+   - Low: covered calls, cash-secured puts, defined-risk spreads
+   - Medium: spreads, earnings-aware trades, credit/debit spreads
+   - High: long calls/puts, short-duration trades, high-IV opportunities
+
+2. **Position Sizing Limits**:
+   - Max position size as % of portfolio
+   - Max loss per trade as % of portfolio
+   - Recommended position size based on max loss
+
+3. **Expiration & Strike Filters**:
+   - Min/max days to expiration
+   - Moneyness range (strike / underlying price)
+   - Min liquidity score threshold
+
+4. **Scoring Weights**: Risk-level-specific factor weights
+   - Low: Emphasizes liquidity (30%) and spread tightness (25%)
+   - Medium: Balanced across all factors
+   - High: Emphasizes volatility (30%) and time decay (30%)
+
+5. **Warning Thresholds**: Risk-level-specific alert triggers
+   - Wide spread threshold
+   - Low volume/open interest thresholds
+   - High IV rank threshold
+
+### Scoring Algorithm
+
+The `OptionsService` class in `services/options_service.py` implements risk-level-aware scoring:
+
+1. **Contract Filtering**: Contracts are filtered by strategy type, expiration, and moneyness
+2. **Component Scoring**: Five factors are scored independently:
+   - Liquidity (volume + open interest)
+   - Spread tightness (bid-ask width)
+   - Moneyness (distance from ATM)
+   - Implied volatility (moderate IV preferred)
+   - Time decay (7–30 days optimal)
+3. **Risk-Weighted Scoring**: Component scores are weighted by risk level
+4. **Grade Assignment**: Scores are mapped to grades (watchlist, candidate, avoid)
+5. **Max Loss Calculation**: Strategy-specific max loss is calculated
+6. **Position Sizing**: Recommended position size is derived from max loss
+
+### Acceptance Criteria Fulfillment
+
+✅ **Risk level changes actual strategy filters**: Each risk level has a distinct `allowed_strategies` list. Contracts are filtered by strategy type before scoring.
+
+✅ **Risk level changes max loss limits**: Each risk level defines `max_loss_per_trade_pct` and `max_position_size_pct`. Position sizing is calculated based on these limits.
+
+✅ **Risk level changes expiration/strike filters**: Each risk level defines `min_days_to_expiration`, `max_days_to_expiration`, and `moneyness_range`. Contracts outside these ranges are rejected.
 
 ## Core Features
 
@@ -247,32 +329,5 @@ Live trading is **disabled by default** and requires explicit user opt-in after:
 ### Deployment
 
 - Docker
-- AWS Elastic Beanstalk or ECS
-- AWS RDS PostgreSQL
-- AWS ElastiCache Redis
-- AWS Secrets Manager
-- AWS CloudWatch
-
-## Example Project Structure
-
-```text
-options-tracker/
-  app/
-    api/
-    core/
-    data_sources/
-    models/
-    news/
-    options/
-    risk/
-    strategies/
-    trading/
-    backtesting/
-    workers/
-  frontend/
-  tests/
-  scripts/
-  docker-compose.yml
-  README.md
-  .env.example
-```
+- Kubernetes or simple VPS
+- GitHub Actions for CI/CD
