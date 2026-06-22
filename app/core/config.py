@@ -55,6 +55,15 @@ class Config:
     POLYGON_API_KEY: Optional[str] = os.getenv("POLYGON_API_KEY")
     NEWS_API_KEY: Optional[str] = os.getenv("NEWS_API_KEY")
 
+    # Data Provider Configuration
+    DATA_PROVIDER: str = os.getenv("DATA_PROVIDER", "mock")  # "mock", "alphavantage", etc.
+    ALPHAVANTAGE_RATE_LIMIT_CALLS_PER_MINUTE: int = int(
+        os.getenv("ALPHAVANTAGE_RATE_LIMIT_CALLS_PER_MINUTE", "5")
+    )
+    ALPHAVANTAGE_CACHE_TTL_SECONDS: int = int(
+        os.getenv("ALPHAVANTAGE_CACHE_TTL_SECONDS", "300")
+    )
+
     # Paper Trading
     PAPER_TRADING_ENABLED: bool = os.getenv("PAPER_TRADING_ENABLED", "True").lower() == "true"
     LIVE_TRADING_ENABLED: bool = os.getenv("LIVE_TRADING_ENABLED", "False").lower() == "true"
