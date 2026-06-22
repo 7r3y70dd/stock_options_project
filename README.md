@@ -20,13 +20,21 @@ Options Tracker allows users to:
 
 **Live trading is disabled by default.** Users must explicitly enable live trading after understanding the risks and completing paper trading validation.
 
+## Technology Stack
+
+- **Backend Framework**: FastAPI (async, typed, auto-docs)
+- **Web Server**: Uvicorn
+- **Database**: PostgreSQL
+- **Cache**: Redis
+- **Testing**: pytest
+
 ## Project Structure
 
 ```
 options-tracker/
 ├── app/
 │   ├── api/                 # REST API endpoints
-│   ├── core/                # Core application logic
+│   ├── core/                # Core application logic, config, error handling
 │   ├── data_sources/        # External data fetching (market data, news)
 │   ├── models/              # Data models and schemas
 │   ├── news/                # News analysis and sentiment
@@ -41,16 +49,17 @@ options-tracker/
 ├── tests/                   # Test suite
 ├── scripts/                 # Utility scripts
 ├── docker-compose.yml       # Docker Compose configuration
+├── Dockerfile               # Docker image definition
 ├── .env.example             # Environment variables template
+├── requirements.txt         # Python dependencies
 ├── README.md                # This file
-└── requirements.txt         # Python dependencies
 ```
 
 ## Setup Instructions
 
 ### Prerequisites
 
-- Python 3.9+
+- Python 3.11+
 - Docker and Docker Compose (for containerized setup)
 - PostgreSQL 13+ (if running without Docker)
 - Redis 6+ (if running without Docker)
@@ -79,14 +88,28 @@ options-tracker/
    docker-compose up -d
    ```
 
-4. **Run migrations**
+4. **Verify the app is running**
    ```bash
-   docker-compose exec app python -m app.core.migrations
+   curl http://localhost:8000/health
+   ```
+   Expected response:
+   ```json
+   {
+     "status": "healthy",
+     "timestamp": "2024-01-15T10:30:45.123456",
+     "service": "Options Tracker API",
+     "version": "0.1.0"
+   }
    ```
 
-5. **Access the application**
-   - API: http://localhost:8000
-   - Check logs: `docker-compose logs -f app`
+5. **Access API documentation**
+   - Swagger UI: http://localhost:8000/docs
+   - ReDoc: http://localhost:8000/redoc
+
+6. **View logs**
+   ```bash
+   docker-compose logs -f app
+   ```
 
 #### Option 2: Local Python Setup
 
@@ -113,9 +136,9 @@ options-tracker/
    ```
    Edit `.env` and add your API keys and database configuration.
 
-5. **Set up database**
+5. **Set up database** (ensure PostgreSQL is running)
    ```bash
-   # Ensure PostgreSQL is running
+   # Run migrations (when available)
    python -m app.core.migrations
    ```
 
@@ -128,6 +151,7 @@ options-tracker/
    ```bash
    python -m app.core.main
    ```
+   The app will start on http://localhost:8000
 
 ### Running Tests
 
@@ -140,6 +164,9 @@ python -m pytest services/test_risk_guardrails.py -v
 
 # Run with coverage
 python -m pytest --cov=app --cov=services
+
+# Run tests in Docker
+docker-compose exec app pytest
 ```
 
 ### Running the Application
@@ -152,6 +179,61 @@ python -m app.core.main --mode paper
 **Live Trading Mode** (requires explicit user approval):
 ```bash
 python -m app.core.main --mode live --approve-live-trading
+```
+
+## API Endpoints
+
+### Health Check
+
+```
+GET /health
+```
+
+Returns the health status of the application.
+
+**Response:**
+```json
+{
+  "status": "healthy",
+  "timestamp": "2024-01-15T10:30:45.123456",
+  "service": "Options Tracker API",
+  "version": "0.1.0"
+}
+```
+
+## Configuration
+
+The application supports three environments: `dev`, `test`, and `prod`. Configuration is managed via environment variables (see `.env.example`).
+
+### Environment Variables
+
+- `ENVIRONMENT`: Application environment (dev/test/prod, default: dev)
+- `DEBUG`: Enable debug mode (default: True in dev)
+- `DATABASE_URL`: PostgreSQL connection string
+- `REDIS_URL`: Redis connection string
+- `SECRET_KEY`: Secret key for session management
+- `ALLOWED_HOSTS`: Comma-separated list of allowed hosts
+- `LOG_LEVEL`: Logging level (INFO/DEBUG/WARNING/ERROR, default: INFO)
+
+See `.env.example` for all available configuration options.
+
+## Error Handling
+
+The application includes comprehensive error handling:
+
+- **Validation Errors** (400): Invalid request data
+- **Unauthorized** (401): Missing or invalid authentication
+- **Forbidden** (403): Insufficient permissions
+- **Not Found** (404): Resource not found
+- **Internal Server Error** (500): Unexpected server errors
+
+All errors return a consistent JSON response:
+```json
+{
+  "error": "ERROR_CODE",
+  "message": "Human-readable error message",
+  "status_code": 400
+}
 ```
 
 ## MVP User Flow
@@ -222,7 +304,7 @@ The MVP defines a complete user journey from authentication through paper trade 
 ### Screen Definitions
 
 | Screen | Purpose | User Input | App Output |
-|--------|---------|-----------|------------||
+|--------|---------|-----------|------------|
 | 1. Login | Authenticate user and establish session | Email/password | Session token; redirect to watchlist |
 | 2. Watchlist Selection | User selects which stocks to analyze | Choose symbols from saved list or add new | Selected watchlist symbols |
 | 3. Risk Level Selection | User defines risk tolerance for scoring | Select Low / Medium / High | Risk profile stored for scoring |
@@ -236,139 +318,4 @@ The MVP defines a complete user journey from authentication through paper trade 
 
 - **No Real-Money Trading**: All trades in MVP are paper trades only. Live trading is disabled by default.
 - **Every Screen Has Purpose**: Each screen advances the user toward a complete trade cycle (entry → monitoring → exit).
-- **Explainability**: Screens 5 and 8 show reasoning (score breakdown, exit rationale) so users understand why the app recommends each action.
-- **Risk Awareness**: Screen 3 and Screen 5 emphasize risk level and estimated downside before any trade is approved.
-
-## Risk Levels
-
-The app supports three risk profiles. Each profile scores opportunities by expected return, probability estimate, liquidity, volatility, and news sentiment:
-
-### Low Risk
-
-Focuses on defined-risk or asset-backed strategies such as:
-
-- Covered calls
-- Cash-secured puts
-- Conservative spreads
-- Higher-liquidity contracts
-- Lower max loss per trade
-
-**Estimated Downside**: Max loss is capped by the strategy structure (e.g., premium received for covered calls).
-
-**Concrete Filters**:
-- Allowed strategies: covered calls, cash-secured puts, defined-risk spreads only
-- Max position size: 5% of portfolio
-- Max loss per trade: 2% of portfolio
-- Max daily loss: 3% of portfolio
-- Expiration window: 7–60 days
-- Strike selection: Near-the-money only (0.95–1.05 moneyness)
-- Min liquidity score: 70/100
-- Min volume: 50 contracts
-- Min open interest: 100 contracts
-- Max bid-ask spread: 5% of mid price
-- Earnings buffer: 5 days before/after earnings
-- Max open positions: 5
-
-### Medium Risk
-
-Allows more directional exposure and moderate risk, such as:
-
-- Debit spreads
-- Credit spreads
-- Earnings-aware trades
-- Moderate expiration windows
-- Medium position sizing
-
-**Estimated Downside**: Max loss is defined by the spread width or debit paid; users should size positions accordingly.
-
-**Concrete Filters**:
-- Allowed strategies: covered calls, cash-secured puts, spreads, earnings-aware trades
-- Max position size: 10% of portfolio
-- Max loss per trade: 5% of portfolio
-- Max daily loss: 5% of portfolio
-- Expiration window: 3–90 days
-- Strike selection: Slightly wider range (0.90–1.10 moneyness)
-- Min liquidity score: 50/100
-- Min volume: 20 contracts
-- Min open interest: 50 contracts
-- Max bid-ask spread: 8% of mid price
-- Earnings buffer: 3 days before/after earnings
-- Max open positions: 10
-
-### High Risk
-
-Allows more aggressive trades, such as:
-
-- Long calls
-- Long puts
-- Shorter expiration contracts
-- Higher volatility opportunities
-- Larger potential reward with higher probability of loss
-- **Note**: No naked short calls (unlimited risk strategies are excluded)
-
-**Estimated Downside**: Max loss can be substantial (up to 100% of premium paid for long options).
-
-**Concrete Filters**:
-- Allowed strategies: long calls, long puts, short-duration trades, high-IV opportunities (but no naked short calls)
-- Max position size: 15% of portfolio
-- Max loss per trade: 10% of portfolio
-- Max daily loss: 10% of portfolio
-- Expiration window: 1–120 days
-- Strike selection: Wider range for directional plays (0.80–1.20 moneyness)
-- Min liquidity score: 30/100
-- Min volume: 5 contracts
-- Min open interest: 10 contracts
-- Max bid-ask spread: 12% of mid price
-- Earnings buffer: 1 day before/after earnings
-- Max open positions: 15
-
-## Risk Level Implementation
-
-This section documents how risk levels are implemented in the service layer and how they affect strategy filtering, scoring, and position sizing.
-
-### Risk Level Configuration
-
-Each risk level is defined by a `RiskLevelConfig` object in `services/__init__.py` that specifies:
-
-1. **Allowed Strategies**: List of strategy types permitted at this risk level
-   - Low: covered calls, cash-secured puts, defined-risk spreads
-   - Medium: spreads, earnings-aware trades, credit/debit spreads
-   - High: long calls/puts, short-duration trades, high-IV opportunities
-
-2. **Position Sizing**: Maximum position size as a percentage of portfolio
-
-3. **Loss Limits**: Maximum loss per trade and per day
-
-4. **Liquidity Requirements**: Minimum volume, open interest, and bid-ask spread tolerances
-
-5. **Scoring Weights**: How different factors (liquidity, volatility, time decay) are weighted in the scoring algorithm
-
-## Troubleshooting
-
-### Database Connection Issues
-
-If you see `psycopg2.OperationalError`:
-1. Ensure PostgreSQL is running: `sudo systemctl status postgresql`
-2. Check DATABASE_URL in `.env` is correct
-3. Verify database exists: `psql -U postgres -l`
-
-### Redis Connection Issues
-
-If you see `redis.exceptions.ConnectionError`:
-1. Ensure Redis is running: `redis-cli ping` should return `PONG`
-2. Check REDIS_URL in `.env` is correct
-
-### API Key Issues
-
-If you see authentication errors:
-1. Verify all API keys in `.env` are correct and active
-2. Check API rate limits haven't been exceeded
-3. Ensure API keys have required permissions
-
-## Contributing
-
-See CONTRIBUTING.md for guidelines on submitting issues and pull requests.
-
-## License
-
-MIT License - see LICENSE file for details.
+- **Explainability**: Screens 5 and 8 show reasoning (score breakdown, exit rationale) so users understand the app's logic.
