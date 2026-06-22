@@ -149,23 +149,38 @@ class NewsArticle(Base):
 
 
 class Signal(Base):
-    """Trading signal model."""
+    """Trading signal model for storing generated trade ideas.
+    
+    Stores trading signals with comprehensive analysis including risk assessment,
+    profit/loss estimates, and strategy information. Every signal includes an
+    explanation (reason) and max-loss estimate as required.
+    """
 
     __tablename__ = "signals"
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
-    option_contract_id = Column(Integer, ForeignKey("option_contracts.id"), nullable=False, index=True)
-    signal_type = Column(String(50), nullable=False)  # buy, sell, hold, etc.
-    confidence = Column(Float, nullable=False)  # 0.0 to 1.0
-    reason = Column(Text, nullable=True)
-    is_active = Column(Boolean, default=True, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    symbol = Column(String(20), nullable=False, index=True)  # Stock symbol
+    strategy_type = Column(String(100), nullable=False)  # e.g., "bull_call_spread", "iron_condor"
+    risk_level = Column(String(50), nullable=False)  # low, medium, high
+    score = Column(Float, nullable=False)  # Overall signal score (0.0 to 1.0)
+    expected_profit = Column(Float, nullable=False)  # Expected profit in dollars
+    max_loss = Column(Float, nullable=False)  # Maximum loss estimate in dollars
+    probability_estimate = Column(Float, nullable=False)  # Probability of profit (0.0 to 1.0)
+    reason = Column(Text, nullable=False)  # Explanation of the signal (required)
+    status = Column(String(50), default="pending", nullable=False, index=True)  # pending, approved, rejected, expired, executed
+    option_contract_id = Column(Integer, ForeignKey("option_contracts.id"), nullable=True, index=True)  # Optional: linked contract
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
     # Relationships
     user = relationship("User", back_populates="signals")
     option_contract = relationship("OptionContract", back_populates="signals")
+
+    # Composite index for efficient querying by user and status
+    __table_args__ = (
+        Index('ix_signals_user_status', 'user_id', 'status'),
+    )
 
 
 class Trade(Base):

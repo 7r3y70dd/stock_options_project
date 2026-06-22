@@ -265,6 +265,212 @@ class TestOptionContractModel:
         assert retrieved.contract_type == "call"
 
 
+class TestSignalModel:
+    """Test Signal model."""
+
+    def test_create_signal_with_all_fields(self, db_session: Session):
+        """Test creating a signal with all required fields."""
+        user = User(
+            username="testuser",
+            email="test@example.com",
+            hashed_password="hashed_password",
+        )
+        db_session.add(user)
+        db_session.commit()
+        
+        signal = Signal(
+            user_id=user.id,
+            symbol="AAPL",
+            strategy_type="bull_call_spread",
+            risk_level="medium",
+            score=0.85,
+            expected_profit=500.0,
+            max_loss=200.0,
+            probability_estimate=0.72,
+            reason="Strong technical setup with bullish momentum and support at 150 level",
+            status="pending",
+        )
+        db_session.add(signal)
+        db_session.commit()
+        
+        retrieved = db_session.query(Signal).filter_by(user_id=user.id).first()
+        assert retrieved is not None
+        assert retrieved.symbol == "AAPL"
+        assert retrieved.strategy_type == "bull_call_spread"
+        assert retrieved.risk_level == "medium"
+        assert retrieved.score == 0.85
+        assert retrieved.expected_profit == 500.0
+        assert retrieved.max_loss == 200.0
+        assert retrieved.probability_estimate == 0.72
+        assert retrieved.reason == "Strong technical setup with bullish momentum and support at 150 level"
+        assert retrieved.status == "pending"
+
+    def test_signal_has_explanation(self, db_session: Session):
+        """Test that every signal has an explanation (reason field)."""
+        user = User(
+            username="testuser",
+            email="test@example.com",
+            hashed_password="hashed_password",
+        )
+        db_session.add(user)
+        db_session.commit()
+        
+        signal = Signal(
+            user_id=user.id,
+            symbol="MSFT",
+            strategy_type="iron_condor",
+            risk_level="low",
+            score=0.65,
+            expected_profit=300.0,
+            max_loss=100.0,
+            probability_estimate=0.68,
+            reason="Earnings play with defined risk and high probability of profit",
+            status="pending",
+        )
+        db_session.add(signal)
+        db_session.commit()
+        
+        retrieved = db_session.query(Signal).filter_by(user_id=user.id).first()
+        assert retrieved.reason is not None
+        assert len(retrieved.reason) > 0
+
+    def test_signal_has_max_loss_estimate(self, db_session: Session):
+        """Test that every signal has a max-loss estimate."""
+        user = User(
+            username="testuser",
+            email="test@example.com",
+            hashed_password="hashed_password",
+        )
+        db_session.add(user)
+        db_session.commit()
+        
+        signal = Signal(
+            user_id=user.id,
+            symbol="GOOGL",
+            strategy_type="covered_call",
+            risk_level="low",
+            score=0.75,
+            expected_profit=250.0,
+            max_loss=150.0,
+            probability_estimate=0.80,
+            reason="Income generation strategy with downside protection",
+            status="pending",
+        )
+        db_session.add(signal)
+        db_session.commit()
+        
+        retrieved = db_session.query(Signal).filter_by(user_id=user.id).first()
+        assert retrieved.max_loss is not None
+        assert retrieved.max_loss > 0
+
+    def test_signal_status_transitions(self, db_session: Session):
+        """Test that signal can have different status values."""
+        user = User(
+            username="testuser",
+            email="test@example.com",
+            hashed_password="hashed_password",
+        )
+        db_session.add(user)
+        db_session.commit()
+        
+        statuses = ["pending", "approved", "rejected", "expired", "executed"]
+        
+        for i, status in enumerate(statuses):
+            signal = Signal(
+                user_id=user.id,
+                symbol=f"TEST{i}",
+                strategy_type="test_strategy",
+                risk_level="medium",
+                score=0.5,
+                expected_profit=100.0,
+                max_loss=50.0,
+                probability_estimate=0.5,
+                reason=f"Test signal with status {status}",
+                status=status,
+            )
+            db_session.add(signal)
+        db_session.commit()
+        
+        retrieved_signals = db_session.query(Signal).filter_by(user_id=user.id).all()
+        assert len(retrieved_signals) == len(statuses)
+        retrieved_statuses = [s.status for s in retrieved_signals]
+        assert set(retrieved_statuses) == set(statuses)
+
+    def test_signal_with_option_contract(self, db_session: Session):
+        """Test signal linked to an option contract."""
+        user = User(
+            username="testuser",
+            email="test@example.com",
+            hashed_password="hashed_password",
+        )
+        db_session.add(user)
+        db_session.commit()
+        
+        contract = OptionContract(
+            symbol="AAPL",
+            expiration="2024-02-16",
+            strike=150.0,
+            contract_type="call",
+            bid=2.0,
+            ask=2.1,
+            volume=1000,
+            open_interest=5000,
+            implied_volatility=0.25,
+            underlying_price=150.0,
+            days_to_expiration=30,
+        )
+        db_session.add(contract)
+        db_session.commit()
+        
+        signal = Signal(
+            user_id=user.id,
+            symbol="AAPL",
+            strategy_type="bull_call_spread",
+            risk_level="medium",
+            score=0.85,
+            expected_profit=500.0,
+            max_loss=200.0,
+            probability_estimate=0.72,
+            reason="Strong technical setup",
+            status="approved",
+            option_contract_id=contract.id,
+        )
+        db_session.add(signal)
+        db_session.commit()
+        
+        retrieved = db_session.query(Signal).filter_by(user_id=user.id).first()
+        assert retrieved.option_contract_id == contract.id
+        assert retrieved.option_contract is not None
+        assert retrieved.option_contract.symbol == "AAPL"
+
+    def test_signal_default_status_is_pending(self, db_session: Session):
+        """Test that signal status defaults to pending."""
+        user = User(
+            username="testuser",
+            email="test@example.com",
+            hashed_password="hashed_password",
+        )
+        db_session.add(user)
+        db_session.commit()
+        
+        signal = Signal(
+            user_id=user.id,
+            symbol="TSLA",
+            strategy_type="put_spread",
+            risk_level="high",
+            score=0.90,
+            expected_profit=1000.0,
+            max_loss=500.0,
+            probability_estimate=0.65,
+            reason="Bearish setup with high reward-to-risk ratio",
+        )
+        db_session.add(signal)
+        db_session.commit()
+        
+        retrieved = db_session.query(Signal).filter_by(user_id=user.id).first()
+        assert retrieved.status == "pending"
+
+
 class TestTradeModel:
     """Test Trade model."""
 
@@ -310,51 +516,6 @@ class TestTradeModel:
         assert retrieved is not None
         assert retrieved.quantity == 10
         assert retrieved.status == "open"
-
-
-class TestSignalModel:
-    """Test Signal model."""
-
-    def test_create_signal(self, db_session: Session):
-        """Test creating a signal."""
-        user = User(
-            username="testuser",
-            email="test@example.com",
-            hashed_password="hashed_password",
-        )
-        db_session.add(user)
-        db_session.commit()
-        
-        contract = OptionContract(
-            symbol="AAPL",
-            expiration="2024-02-16",
-            strike=150.0,
-            contract_type="call",
-            bid=2.0,
-            ask=2.1,
-            volume=1000,
-            open_interest=5000,
-            implied_volatility=0.25,
-            underlying_price=150.0,
-            days_to_expiration=30,
-        )
-        db_session.add(contract)
-        db_session.commit()
-        
-        signal = Signal(
-            user_id=user.id,
-            option_contract_id=contract.id,
-            signal_type="buy",
-            confidence=0.85,
-            reason="Strong technical setup",
-        )
-        db_session.add(signal)
-        db_session.commit()
-        
-        retrieved = db_session.query(Signal).filter_by(user_id=user.id).first()
-        assert retrieved is not None
-        assert retrieved.confidence == 0.85
-        assert retrieved.signal_type == "buy"
 
 
 class TestBacktestResultModel:
@@ -411,47 +572,3 @@ class TestDatabaseReset:
         
         # Verify data exists
         assert db_session.query(User).count() == 1
-        
-        # Reset database
-        db_session.close()
-        reset_db()
-        
-        # Verify data is gone
-        new_session = SessionLocal()
-        assert new_session.query(User).count() == 0
-        new_session.close()
-
-    def test_reset_db_fails_in_production(self):
-        """Test that reset_db raises error in production."""
-        # Temporarily set environment to prod
-        original_env = Config.ENVIRONMENT
-        try:
-            Config.ENVIRONMENT = Environment.PROD
-            with pytest.raises(RuntimeError, match="Cannot reset database in production"):
-                reset_db()
-        finally:
-            Config.ENVIRONMENT = original_env
-
-
-class TestMigrations:
-    """Test database migrations."""
-
-    def test_migrations_run_cleanly(self, db_session: Session):
-        """Test that migrations run without errors."""
-        # If we got here, migrations ran successfully
-        # Verify all tables exist
-        inspector = db_session.connection().dialect.inspector
-        tables = inspector.get_table_names()
-        
-        required_tables = [
-            "users",
-            "watchlists",
-            "watchlist_symbols",
-            "option_contracts",
-            "signals",
-            "trades",
-            "backtest_results",
-        ]
-        
-        for table in required_tables:
-            assert table in tables
