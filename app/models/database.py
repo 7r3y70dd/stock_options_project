@@ -17,6 +17,7 @@ from sqlalchemy import (
     Text,
     Enum as SQLEnum,
     UniqueConstraint,
+    Index,
 )
 from sqlalchemy.orm import relationship
 
@@ -86,20 +87,30 @@ class WatchlistSymbol(Base):
 
 
 class OptionContract(Base):
-    """Option contract model."""
+    """Option contract model for storing normalized option chain data.
+    
+    Stores option contract data including Greeks (delta, gamma, theta, vega),
+    market data (bid, ask, volume, open_interest), and contract specifications.
+    """
 
     __tablename__ = "option_contracts"
 
     id = Column(Integer, primary_key=True, index=True)
     symbol = Column(String(20), nullable=False, index=True)
+    underlying_symbol = Column(String(20), nullable=True, index=True)  # For index options
     expiration = Column(String(10), nullable=False, index=True)  # YYYY-MM-DD
-    strike = Column(Float, nullable=False)
-    contract_type = Column(String(10), nullable=False)  # call or put
+    strike = Column(Float, nullable=False, index=True)
+    contract_type = Column(String(10), nullable=False, index=True)  # call or put
     bid = Column(Float, nullable=False)
     ask = Column(Float, nullable=False)
+    last = Column(Float, nullable=True)  # Last traded price
     volume = Column(Integer, nullable=False)
     open_interest = Column(Integer, nullable=False)
     implied_volatility = Column(Float, nullable=False)
+    delta = Column(Float, nullable=True)  # Greek: delta
+    gamma = Column(Float, nullable=True)  # Greek: gamma
+    theta = Column(Float, nullable=True)  # Greek: theta
+    vega = Column(Float, nullable=True)  # Greek: vega
     underlying_price = Column(Float, nullable=False)
     days_to_expiration = Column(Integer, nullable=False)
     earnings_date = Column(String(10), nullable=True)  # YYYY-MM-DD
@@ -108,6 +119,11 @@ class OptionContract(Base):
     # Relationships
     trades = relationship("Trade", back_populates="option_contract")
     signals = relationship("Signal", back_populates="option_contract")
+
+    # Composite index for efficient querying by expiration, strike, and contract_type
+    __table_args__ = (
+        Index('ix_option_contracts_expiration_strike_type', 'expiration', 'strike', 'contract_type'),
+    )
 
 
 class NewsArticle(Base):
