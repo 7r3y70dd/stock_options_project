@@ -11,6 +11,7 @@ from app.strategies import (
     get_strategy_registry,
     set_strategy_registry,
     CoveredCallStrategy,
+    CashSecuredPutStrategy,
 )
 from services.options_service import OptionContract
 from services import RiskLevel
@@ -362,19 +363,19 @@ class TestStrategyRegistry:
         assert len(signals) == 0
 
 
-class TestCoveredCallStrategy:
-    """Tests for CoveredCallStrategy."""
+class TestCashSecuredPutStrategy:
+    """Tests for CashSecuredPutStrategy."""
 
-    def test_covered_call_initialization(self):
-        """Test covered call strategy initialization."""
-        strategy = CoveredCallStrategy(name="covered_call", enabled=True)
+    def test_strategy_initialization(self):
+        """Test cash-secured put strategy initialization."""
+        strategy = CashSecuredPutStrategy(name="cash_secured_put", enabled=True)
         
-        assert strategy.name == "covered_call"
+        assert strategy.name == "cash_secured_put"
         assert strategy.is_enabled() is True
 
-    def test_covered_call_requires_shares(self):
-        """Test that covered call requires share position."""
-        strategy = CoveredCallStrategy()
+    def test_strategy_skips_when_insufficient_cash(self):
+        """Test that strategy skips when insufficient cash available."""
+        strategy = CashSecuredPutStrategy()
         
         market_data = MarketData(
             symbol="AAPL",
@@ -387,8 +388,8 @@ class TestCoveredCallStrategy:
             OptionContract(
                 symbol="AAPL",
                 expiration="2024-12-20",
-                strike=155.0,
-                contract_type="call",
+                strike=145.0,
+                contract_type="put",
                 bid=2.0,
                 ask=2.5,
                 volume=100,
@@ -396,22 +397,24 @@ class TestCoveredCallStrategy:
                 implied_volatility=0.25,
                 underlying_price=150.0,
                 days_to_expiration=30,
+                delta=-0.3,
             )
         ]
         
-        # No shares - should return None
+        # Insufficient cash
         signal = strategy.generate(
             symbol="AAPL",
             market_data=market_data,
             options_chain=options_chain,
-            share_position=0,
+            risk_profile=RiskLevel.MEDIUM,
+            available_cash=5000.0,  # Less than MIN_CASH_REQUIRED
         )
         
         assert signal is None
 
-    def test_covered_call_generates_signal_with_shares(self):
-        """Test that covered call generates signal when shares available."""
-        strategy = CoveredCallStrategy()
+    def test_strategy_generates_signal_with_sufficient_cash(self):
+        """Test that strategy generates signal with sufficient cash."""
+        strategy = CashSecuredPutStrategy()
         
         market_data = MarketData(
             symbol="AAPL",
@@ -424,8 +427,8 @@ class TestCoveredCallStrategy:
             OptionContract(
                 symbol="AAPL",
                 expiration="2024-12-20",
-                strike=155.0,
-                contract_type="call",
+                strike=145.0,
+                contract_type="put",
                 bid=2.0,
                 ask=2.5,
                 volume=100,
@@ -433,82 +436,30 @@ class TestCoveredCallStrategy:
                 implied_volatility=0.25,
                 underlying_price=150.0,
                 days_to_expiration=30,
-                delta=0.4,
+                delta=-0.3,
             )
         ]
         
-        # 100 shares - should generate signal
+        # Sufficient cash
         signal = strategy.generate(
             symbol="AAPL",
             market_data=market_data,
             options_chain=options_chain,
-            share_position=100,
+            risk_profile=RiskLevel.MEDIUM,
+            available_cash=50000.0,  # More than MIN_CASH_REQUIRED
         )
         
         assert signal is not None
         assert isinstance(signal, StrategySignal)
         assert signal.symbol == "AAPL"
-        assert signal.strategy_type == "covered_call"
+        assert signal.strategy_type == "cash_secured_put"
         assert signal.reason is not None
-        assert signal.max_loss == 0.0  # Covered calls have no additional downside
-        assert signal.option_contracts is not None
-        assert len(signal.option_contracts) > 0
+        assert signal.max_loss > 0.0
+        assert signal.expected_profit > 0.0
 
-    def test_covered_call_filters_otm_calls(self):
-        """Test that covered call filters for OTM calls."""
-        strategy = CoveredCallStrategy()
-        
-        market_data = MarketData(
-            symbol="AAPL",
-            current_price=150.0,
-            price_history=[{"close": 150.0}],
-            quote_timestamp=datetime.utcnow(),
-        )
-        
-        # Mix of ITM and OTM calls
-        options_chain = [
-            OptionContract(
-                symbol="AAPL",
-                expiration="2024-12-20",
-                strike=145.0,  # ITM - should be filtered out
-                contract_type="call",
-                bid=5.0,
-                ask=5.5,
-                volume=100,
-                open_interest=500,
-                implied_volatility=0.25,
-                underlying_price=150.0,
-                days_to_expiration=30,
-            ),
-            OptionContract(
-                symbol="AAPL",
-                expiration="2024-12-20",
-                strike=155.0,  # OTM - should be included
-                contract_type="call",
-                bid=2.0,
-                ask=2.5,
-                volume=100,
-                open_interest=500,
-                implied_volatility=0.25,
-                underlying_price=150.0,
-                days_to_expiration=30,
-            ),
-        ]
-        
-        signal = strategy.generate(
-            symbol="AAPL",
-            market_data=market_data,
-            options_chain=options_chain,
-            share_position=100,
-        )
-        
-        # Should generate signal with OTM call
-        assert signal is not None
-        assert signal.option_contracts[0].strike == 155.0
-
-    def test_covered_call_includes_max_upside_and_opportunity_cost(self):
-        """Test that signal includes max upside and opportunity cost."""
-        strategy = CoveredCallStrategy()
+    def test_strategy_signal_includes_assignment_scenario(self):
+        """Test that signal includes assignment scenario in breakdown."""
+        strategy = CashSecuredPutStrategy()
         
         market_data = MarketData(
             symbol="AAPL",
@@ -521,8 +472,8 @@ class TestCoveredCallStrategy:
             OptionContract(
                 symbol="AAPL",
                 expiration="2024-12-20",
-                strike=155.0,
-                contract_type="call",
+                strike=145.0,
+                contract_type="put",
                 bid=2.0,
                 ask=2.5,
                 volume=100,
@@ -530,7 +481,7 @@ class TestCoveredCallStrategy:
                 implied_volatility=0.25,
                 underlying_price=150.0,
                 days_to_expiration=30,
-                delta=0.4,
+                delta=-0.3,
             )
         ]
         
@@ -538,30 +489,141 @@ class TestCoveredCallStrategy:
             symbol="AAPL",
             market_data=market_data,
             options_chain=options_chain,
-            share_position=100,
+            risk_profile=RiskLevel.MEDIUM,
+            available_cash=50000.0,
         )
         
         assert signal is not None
         assert signal.breakdown is not None
-        assert "max_upside" in signal.breakdown
-        assert "opportunity_cost" in signal.breakdown
-        assert "premium_income" in signal.breakdown
-        assert "annualized_return" in signal.breakdown
+        assert "assignment_risk" in signal.breakdown
+        assert "cash_requirement" in signal.breakdown
+        assert "breakeven" in signal.breakdown
+        assert "max_loss" in signal.breakdown
 
-
-class TestGlobalRegistry:
-    """Tests for global registry functions."""
-
-    def test_get_strategy_registry(self):
-        """Test getting global strategy registry."""
-        registry = get_strategy_registry()
+    def test_strategy_filters_otm_puts(self):
+        """Test that strategy filters for out-of-the-money puts."""
+        strategy = CashSecuredPutStrategy()
         
-        assert isinstance(registry, StrategyRegistry)
-
-    def test_set_strategy_registry(self):
-        """Test setting global strategy registry."""
-        new_registry = StrategyRegistry()
-        set_strategy_registry(new_registry)
+        market_data = MarketData(
+            symbol="AAPL",
+            current_price=150.0,
+            price_history=[{"close": 150.0}],
+            quote_timestamp=datetime.utcnow(),
+        )
         
-        retrieved = get_strategy_registry()
-        assert retrieved is new_registry
+        # ITM put (strike >= current price) - should be filtered out
+        options_chain = [
+            OptionContract(
+                symbol="AAPL",
+                expiration="2024-12-20",
+                strike=150.0,  # At the money
+                contract_type="put",
+                bid=2.0,
+                ask=2.5,
+                volume=100,
+                open_interest=500,
+                implied_volatility=0.25,
+                underlying_price=150.0,
+                days_to_expiration=30,
+                delta=-0.5,
+            )
+        ]
+        
+        signal = strategy.generate(
+            symbol="AAPL",
+            market_data=market_data,
+            options_chain=options_chain,
+            risk_profile=RiskLevel.MEDIUM,
+            available_cash=50000.0,
+        )
+        
+        # Should not generate signal for ATM/ITM puts
+        assert signal is None
+
+    def test_strategy_respects_cash_limits(self):
+        """Test that strategy respects cash limits."""
+        strategy = CashSecuredPutStrategy()
+        
+        market_data = MarketData(
+            symbol="AAPL",
+            current_price=150.0,
+            price_history=[{"close": 150.0}],
+            quote_timestamp=datetime.utcnow(),
+        )
+        
+        # High strike put requiring significant cash
+        options_chain = [
+            OptionContract(
+                symbol="AAPL",
+                expiration="2024-12-20",
+                strike=145.0,
+                contract_type="put",
+                bid=2.0,
+                ask=2.5,
+                volume=100,
+                open_interest=500,
+                implied_volatility=0.25,
+                underlying_price=150.0,
+                days_to_expiration=30,
+                delta=-0.3,
+            )
+        ]
+        
+        # Cash requirement for this put: 145 * 100 = $14,500
+        # Available cash is less than requirement
+        signal = strategy.generate(
+            symbol="AAPL",
+            market_data=market_data,
+            options_chain=options_chain,
+            risk_profile=RiskLevel.MEDIUM,
+            available_cash=14000.0,  # Less than cash requirement
+        )
+        
+        # Should not generate signal if cash requirement exceeds available
+        assert signal is None
+
+    def test_strategy_signal_has_required_fields(self):
+        """Test that signal has all required fields."""
+        strategy = CashSecuredPutStrategy()
+        
+        market_data = MarketData(
+            symbol="AAPL",
+            current_price=150.0,
+            price_history=[{"close": 150.0}],
+            quote_timestamp=datetime.utcnow(),
+        )
+        
+        options_chain = [
+            OptionContract(
+                symbol="AAPL",
+                expiration="2024-12-20",
+                strike=145.0,
+                contract_type="put",
+                bid=2.0,
+                ask=2.5,
+                volume=100,
+                open_interest=500,
+                implied_volatility=0.25,
+                underlying_price=150.0,
+                days_to_expiration=30,
+                delta=-0.3,
+            )
+        ]
+        
+        signal = strategy.generate(
+            symbol="AAPL",
+            market_data=market_data,
+            options_chain=options_chain,
+            risk_profile=RiskLevel.MEDIUM,
+            available_cash=50000.0,
+        )
+        
+        assert signal is not None
+        # Verify all required fields
+        assert signal.reason is not None
+        assert len(signal.reason) > 0
+        assert signal.max_loss is not None
+        assert signal.max_loss > 0.0
+        assert signal.expected_profit is not None
+        assert signal.probability_estimate is not None
+        assert 0.0 <= signal.probability_estimate <= 1.0

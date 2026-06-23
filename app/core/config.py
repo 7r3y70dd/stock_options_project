@@ -114,6 +114,16 @@ class Config:
     COVERED_CALL_MIN_OPEN_INTEREST: int = int(os.getenv("COVERED_CALL_MIN_OPEN_INTEREST", "20"))
     COVERED_CALL_MAX_SPREAD_PCT: float = float(os.getenv("COVERED_CALL_MAX_SPREAD_PCT", "0.05"))
 
+    # Cash-Secured Put Strategy Configuration
+    CASH_SECURED_PUT_MIN_CASH: float = float(os.getenv("CASH_SECURED_PUT_MIN_CASH", "10000.0"))
+    CASH_SECURED_PUT_OTM_THRESHOLD: float = float(os.getenv("CASH_SECURED_PUT_OTM_THRESHOLD", "0.02"))
+    CASH_SECURED_PUT_MAX_OTM_THRESHOLD: float = float(os.getenv("CASH_SECURED_PUT_MAX_OTM_THRESHOLD", "0.15"))
+    CASH_SECURED_PUT_MIN_DTE: int = int(os.getenv("CASH_SECURED_PUT_MIN_DTE", "7"))
+    CASH_SECURED_PUT_MAX_DTE: int = int(os.getenv("CASH_SECURED_PUT_MAX_DTE", "60"))
+    CASH_SECURED_PUT_MIN_VOLUME: int = int(os.getenv("CASH_SECURED_PUT_MIN_VOLUME", "10"))
+    CASH_SECURED_PUT_MIN_OPEN_INTEREST: int = int(os.getenv("CASH_SECURED_PUT_MIN_OPEN_INTEREST", "20"))
+    CASH_SECURED_PUT_MAX_SPREAD_PCT: float = float(os.getenv("CASH_SECURED_PUT_MAX_SPREAD_PCT", "0.05"))
+
     # Logging
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
 
