@@ -44,6 +44,7 @@ class OptionContract:
     theoretical_price: Optional[float] = None  # Black-Scholes theoretical price
     pricing_difference: Optional[float] = None  # Market mid-price minus theoretical price
     pricing_assessment: Optional[str] = None  # "overpriced", "underpriced", "fair"
+    liquidity_score: float = 0.0  # Liquidity score 0-100, default 0.0
 
 
 @dataclass
@@ -349,121 +350,90 @@ class GreeksAnalyzer:
             risk_level: Risk level for threshold comparison
             
         Returns:
-            Score from 0.0 to 1.0, where 1.0 is best
+            Greeks score from 0.0 to 1.0 (higher is better)
         """
         acceptable, warnings, scores = GreeksAnalyzer.assess_greek_profile(contract, risk_level)
         
-        # If no Greeks data, return perfect score
         if not scores:
-            return 1.0
+            return 0.5  # Default score if no Greeks available
         
         # Average the individual scores
-        if scores:
-            avg_score = sum(scores.values()) / len(scores)
-            # Invert so lower scores are better (closer to 0 is better)
-            # Then convert to 0-1 scale where 1.0 is best
-            return 1.0 - min(avg_score, 1.0)
+        avg_score = sum(scores.values()) / len(scores)
         
-        return 1.0
+        # Penalize if not acceptable
+        if not acceptable:
+            avg_score *= 0.7  # 30% penalty for exceeding thresholds
+        
+        return min(avg_score, 1.0)
 
 
 class PricingAnalyzer:
-    """Analyzer for option pricing using Black-Scholes or other models."""
+    """Analyzer for option pricing and theoretical value."""
 
-    def __init__(
-        self,
-        risk_free_rate: float = 0.05,
-        dividend_yield: float = 0.0,
-    ):
-        """Initialize PricingAnalyzer.
-        
-        Args:
-            risk_free_rate: Risk-free rate for pricing (default: 5%)
-            dividend_yield: Dividend yield for pricing (default: 0%)
-        """
-        self.risk_free_rate = risk_free_rate
-        self.dividend_yield = dividend_yield
-        self.pricing_engine = None
-        
-        # Initialize QuantLib pricing engine if available
-        if QUANTLIB_AVAILABLE:
-            try:
-                self.pricing_engine = QuantLibPricingEngine(
-                    risk_free_rate=risk_free_rate,
-                    dividend_yield=dividend_yield,
-                )
-            except Exception:
-                # If QuantLib initialization fails, continue without it
-                self.pricing_engine = None
-
+    @staticmethod
     def calculate_theoretical_price(
-        self,
         contract: OptionContract,
+        risk_free_rate: float = 0.05,
     ) -> Optional[float]:
-        """Calculate theoretical price for a contract using Black-Scholes.
+        """Calculate theoretical price using Black-Scholes model.
         
         Args:
             contract: OptionContract to price
+            risk_free_rate: Risk-free interest rate (default: 5%)
             
         Returns:
-            Theoretical price, or None if pricing engine unavailable or data missing
+            Theoretical price, or None if insufficient data
         """
-        # Check required data
-        if (
-            contract.underlying_price is None
-            or contract.strike is None
-            or contract.implied_volatility is None
-            or contract.days_to_expiration is None
-        ):
+        if not QUANTLIB_AVAILABLE:
             return None
         
-        # Use QuantLib if available
-        if self.pricing_engine:
-            try:
-                price = self.pricing_engine.price(
-                    spot=contract.underlying_price,
-                    strike=contract.strike,
-                    volatility=contract.implied_volatility,
-                    time_to_expiration=contract.days_to_expiration / 365.0,
-                    option_type=contract.contract_type,
-                )
-                return price
-            except Exception:
-                return None
+        if contract.underlying_price is None or contract.implied_volatility is None:
+            return None
         
-        return None
+        try:
+            engine = QuantLibPricingEngine()
+            price = engine.price_option(
+                spot_price=contract.underlying_price,
+                strike_price=contract.strike,
+                time_to_expiration=contract.days_to_expiration / 365.0 if contract.days_to_expiration else 0.1,
+                volatility=contract.implied_volatility,
+                risk_free_rate=risk_free_rate,
+                option_type="call" if contract.contract_type.lower() == "call" else "put",
+            )
+            return price
+        except Exception:
+            return None
 
+    @staticmethod
     def compare_prices(
-        self,
         contract: OptionContract,
-    ) -> Tuple[Optional[float], Optional[float], Optional[str]]:
+        theoretical_price: Optional[float] = None,
+    ) -> Tuple[Optional[float], Optional[str]]:
         """Compare market price with theoretical price.
         
         Args:
-            contract: OptionContract to compare
+            contract: OptionContract to analyze
+            theoretical_price: Optional pre-calculated theoretical price
             
         Returns:
-            Tuple of (theoretical_price, difference, assessment)
-            where assessment is "overpriced", "underpriced", or "fair"
+            Tuple of (pricing_difference, assessment) where assessment is "overpriced", "underpriced", or "fair"
         """
-        # Check required data
         if contract.bid is None or contract.ask is None:
-            return None, None, None
+            return None, None
         
-        # Calculate market mid-price
-        market_mid = (contract.bid + contract.ask) / 2.0
+        market_mid = (contract.bid + contract.ask) / 2
         
-        # Calculate theoretical price
-        theoretical = self.calculate_theoretical_price(contract)
-        if theoretical is None:
-            return None, None, None
+        if theoretical_price is None:
+            theoretical_price = PricingAnalyzer.calculate_theoretical_price(contract)
         
-        # Calculate difference
-        difference = market_mid - theoretical
+        if theoretical_price is None:
+            return None, None
         
-        # Assess pricing
-        # Consider 5% threshold for fair pricing
-        threshold = theoretical * 0.05
+        difference = market_mid - theoretical_price
+        
+        # Determine if overpriced or underpriced (threshold: 5% of theoretical price)
+        threshold = theoretical_price * 0.05
+        
         if difference > threshold:
             assessment = "overpriced"
         elif difference < -threshold:
@@ -471,274 +441,4 @@ class PricingAnalyzer:
         else:
             assessment = "fair"
         
-        return theoretical, difference, assessment
-
-
-class OptionsChainFilter:
-    """Filter option contracts based on quality and risk criteria."""
-
-    def __init__(self, risk_level: RiskLevel = RiskLevel.MEDIUM):
-        """Initialize OptionsChainFilter.
-        
-        Args:
-            risk_level: Risk level for filtering thresholds
-        """
-        self.risk_level = risk_level
-        self.risk_config = get_risk_config(risk_level)
-
-    def filter_expired(
-        self,
-        contract: OptionContract,
-    ) -> FilteredContract:
-        """Filter out expired contracts.
-        
-        Args:
-            contract: OptionContract to filter
-            
-        Returns:
-            FilteredContract with passed=False if expired
-        """
-        if contract.days_to_expiration is not None and contract.days_to_expiration <= 0:
-            return FilteredContract(
-                contract=contract,
-                passed=False,
-                rejection_reason=RejectionReason.EXPIRED,
-                rejection_message="Contract has expired",
-            )
-        
-        return FilteredContract(
-            contract=contract,
-            passed=True,
-            rejection_reason=RejectionReason.PASSED,
-            rejection_message="",
-        )
-
-    def filter_missing_bid_ask(
-        self,
-        contract: OptionContract,
-    ) -> FilteredContract:
-        """Filter out contracts with missing bid/ask.
-        
-        Args:
-            contract: OptionContract to filter
-            
-        Returns:
-            FilteredContract with passed=False if bid/ask missing
-        """
-        if contract.bid is None or contract.ask is None:
-            return FilteredContract(
-                contract=contract,
-                passed=False,
-                rejection_reason=RejectionReason.MISSING_BID_ASK,
-                rejection_message="Missing bid or ask price",
-            )
-        
-        return FilteredContract(
-            contract=contract,
-            passed=True,
-            rejection_reason=RejectionReason.PASSED,
-            rejection_message="",
-        )
-
-    def filter_illiquid(
-        self,
-        contract: OptionContract,
-    ) -> FilteredContract:
-        """Filter out illiquid contracts (low volume/open interest).
-        
-        Args:
-            contract: OptionContract to filter
-            
-        Returns:
-            FilteredContract with passed=False if illiquid
-        """
-        volume = contract.volume or 0
-        open_interest = contract.open_interest or 0
-        
-        if volume < self.risk_config.min_volume:
-            return FilteredContract(
-                contract=contract,
-                passed=False,
-                rejection_reason=RejectionReason.VOLUME_TOO_LOW,
-                rejection_message=f"Volume {volume} below minimum {self.risk_config.min_volume}",
-            )
-        
-        if open_interest < self.risk_config.min_open_interest:
-            return FilteredContract(
-                contract=contract,
-                passed=False,
-                rejection_reason=RejectionReason.OPEN_INTEREST_TOO_LOW,
-                rejection_message=f"Open interest {open_interest} below minimum {self.risk_config.min_open_interest}",
-            )
-        
-        return FilteredContract(
-            contract=contract,
-            passed=True,
-            rejection_reason=RejectionReason.PASSED,
-            rejection_message="",
-        )
-
-    def filter_spread(
-        self,
-        contract: OptionContract,
-    ) -> FilteredContract:
-        """Filter out contracts with excessive bid-ask spread.
-        
-        Args:
-            contract: OptionContract to filter
-            
-        Returns:
-            FilteredContract with passed=False if spread too wide
-        """
-        if contract.bid is None or contract.ask is None:
-            return FilteredContract(
-                contract=contract,
-                passed=False,
-                rejection_reason=RejectionReason.MISSING_BID_ASK,
-                rejection_message="Missing bid or ask price",
-            )
-        
-        mid_price = (contract.bid + contract.ask) / 2.0
-        if mid_price == 0:
-            return FilteredContract(
-                contract=contract,
-                passed=False,
-                rejection_reason=RejectionReason.BID_ASK_SPREAD_TOO_WIDE,
-                rejection_message="Invalid bid/ask prices",
-            )
-        
-        spread_pct = ((contract.ask - contract.bid) / mid_price) * 100.0
-        
-        if spread_pct > self.risk_config.max_bid_ask_spread_pct:
-            return FilteredContract(
-                contract=contract,
-                passed=False,
-                rejection_reason=RejectionReason.BID_ASK_SPREAD_TOO_WIDE,
-                rejection_message=f"Spread {spread_pct:.2f}% exceeds maximum {self.risk_config.max_bid_ask_spread_pct}%",
-            )
-        
-        return FilteredContract(
-            contract=contract,
-            passed=True,
-            rejection_reason=RejectionReason.PASSED,
-            rejection_message="",
-        )
-
-    def filter_expiration_window(
-        self,
-        contract: OptionContract,
-    ) -> FilteredContract:
-        """Filter out contracts outside expiration window.
-        
-        Args:
-            contract: OptionContract to filter
-            
-        Returns:
-            FilteredContract with passed=False if outside window
-        """
-        if contract.days_to_expiration is None:
-            return FilteredContract(
-                contract=contract,
-                passed=False,
-                rejection_reason=RejectionReason.OUTSIDE_EXPIRATION_WINDOW,
-                rejection_message="Days to expiration unknown",
-            )
-        
-        if contract.days_to_expiration < self.risk_config.min_days_to_expiration:
-            return FilteredContract(
-                contract=contract,
-                passed=False,
-                rejection_reason=RejectionReason.OUTSIDE_EXPIRATION_WINDOW,
-                rejection_message=f"DTE {contract.days_to_expiration} below minimum {self.risk_config.min_days_to_expiration}",
-            )
-        
-        if contract.days_to_expiration > self.risk_config.max_days_to_expiration:
-            return FilteredContract(
-                contract=contract,
-                passed=False,
-                rejection_reason=RejectionReason.OUTSIDE_EXPIRATION_WINDOW,
-                rejection_message=f"DTE {contract.days_to_expiration} exceeds maximum {self.risk_config.max_days_to_expiration}",
-            )
-        
-        return FilteredContract(
-            contract=contract,
-            passed=True,
-            rejection_reason=RejectionReason.PASSED,
-            rejection_message="",
-        )
-
-    def filter_all(
-        self,
-        contract: OptionContract,
-    ) -> FilteredContract:
-        """Apply all filters to a contract.
-        
-        Args:
-            contract: OptionContract to filter
-            
-        Returns:
-            FilteredContract with first rejection reason encountered
-        """
-        # Apply filters in order
-        result = self.filter_expired(contract)
-        if not result.passed:
-            return result
-        
-        result = self.filter_missing_bid_ask(contract)
-        if not result.passed:
-            return result
-        
-        result = self.filter_illiquid(contract)
-        if not result.passed:
-            return result
-        
-        result = self.filter_spread(contract)
-        if not result.passed:
-            return result
-        
-        result = self.filter_expiration_window(contract)
-        if not result.passed:
-            return result
-        
-        return FilteredContract(
-            contract=contract,
-            passed=True,
-            rejection_reason=RejectionReason.PASSED,
-            rejection_message="",
-        )
-
-
-class OptionsService:
-    """Main service for options analysis and scoring."""
-
-    def __init__(
-        self,
-        data_provider: Optional[DataProvider] = None,
-        risk_level: RiskLevel = RiskLevel.MEDIUM,
-    ):
-        """Initialize OptionsService.
-        
-        Args:
-            data_provider: Optional data provider (defaults to MockDataProvider)
-            risk_level: Risk level for filtering and scoring
-        """
-        self.data_provider = data_provider or MockDataProvider()
-        self.risk_level = risk_level
-        self.filter = OptionsChainFilter(risk_level=risk_level)
-        self.volatility_analyzer = VolatilityAnalyzer()
-        self.greeks_analyzer = GreeksAnalyzer()
-        self.pricing_analyzer = PricingAnalyzer()
-
-    def filter_chain(
-        self,
-        contracts: List[OptionContract],
-    ) -> List[FilteredContract]:
-        """Filter a chain of option contracts.
-        
-        Args:
-            contracts: List of OptionContract to filter
-            
-        Returns:
-            List of FilteredContract with pass/fail status
-        """
-        return [self.filter.filter_all(contract) for contract in contracts]
+        return difference, assessment

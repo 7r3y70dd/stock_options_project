@@ -44,6 +44,7 @@ class CashSecuredPutStrategy(Strategy):
     MIN_OPEN_INTEREST = 20  # Minimum open interest for liquidity
     MAX_BID_ASK_SPREAD_PCT = 0.05  # Maximum bid-ask spread as % of mid-price (5%)
     CASH_REQUIREMENT_MULTIPLIER = 1.0  # 100% of strike * 100 shares per contract
+    DEFAULT_LIQUIDITY_SCORE = 50.0  # Default liquidity score if not provided
 
     def __init__(self, name: str = "cash_secured_put", enabled: bool = True):
         """Initialize cash-secured put strategy.
@@ -148,6 +149,9 @@ class CashSecuredPutStrategy(Strategy):
             breakeven=breakeven,
         )
 
+        # Get liquidity score with fallback
+        liquidity_score = self._get_liquidity_score(best_put)
+
         # Create signal
         signal = StrategySignal(
             symbol=symbol,
@@ -166,7 +170,7 @@ class CashSecuredPutStrategy(Strategy):
                 "cash_requirement": cash_requirement,
                 "breakeven": breakeven,
                 "max_loss": max_loss,
-                "liquidity_score": best_put.liquidity_score,
+                "liquidity_score": liquidity_score,
             },
         )
 
@@ -275,6 +279,9 @@ class CashSecuredPutStrategy(Strategy):
                 )
                 continue
 
+            # Get liquidity score with fallback
+            liquidity_score = self._get_liquidity_score(put)
+
             # Calculate score (0-1)
             # Higher annualized return = higher score
             # Lower assignment risk = higher score
@@ -282,14 +289,14 @@ class CashSecuredPutStrategy(Strategy):
             # Lower cash requirement relative to available = higher score
             return_score = min(annualized_return / 0.50, 1.0)  # 50% annualized = perfect score
             risk_score = 1.0 - assignment_risk
-            liquidity_score = (put.liquidity_score or 50) / 100.0
+            liquidity_score_normalized = liquidity_score / 100.0
             cash_efficiency = 1.0 - (cash_req / available_cash)  # Higher score if less cash required
 
             # Weighted score
             score = (
                 return_score * 0.4 +  # 40% weight on return
                 risk_score * 0.3 +  # 30% weight on low assignment risk
-                liquidity_score * 0.2 +  # 20% weight on liquidity
+                liquidity_score_normalized * 0.2 +  # 20% weight on liquidity
                 cash_efficiency * 0.1  # 10% weight on cash efficiency
             )
 
@@ -317,151 +324,184 @@ class CashSecuredPutStrategy(Strategy):
                 breakdown={
                     "return_score": return_score,
                     "risk_score": risk_score,
-                    "liquidity_score": liquidity_score,
+                    "liquidity_score": liquidity_score_normalized,
                     "cash_efficiency": cash_efficiency,
-                    "annualized_return": annualized_return,
-                    "assignment_risk": assignment_risk,
                 },
-                warnings=self._generate_warnings(put, assignment_risk, cash_req, available_cash),
+                warnings=[],
                 explanation=explanation,
                 max_loss_pct=max_loss_pct,
                 position_size_pct=position_size_pct,
-                liquidity_score=put.liquidity_score or 50,
+                liquidity_score=liquidity_score,
                 implied_volatility=put.implied_volatility,
-                delta=put.delta,
-                theta=put.theta,
             )
-
             scored.append(scored_option)
 
         # Sort by score (highest first)
         scored.sort(key=lambda x: x.score, reverse=True)
         return scored
 
-    def _calculate_premium_income(self, put: OptionContract) -> float:
-        """Calculate premium income from selling a put.
+    def _get_liquidity_score(self, contract: OptionContract) -> float:
+        """Get liquidity score from contract, with fallback calculation.
         
         Args:
-            put: Put option contract
+            contract: OptionContract to get liquidity score from
             
         Returns:
-            Premium income in dollars (bid price * 100 shares per contract)
+            Liquidity score 0-100
         """
-        if put.bid is None:
+        # If contract has liquidity_score attribute, use it
+        if hasattr(contract, 'liquidity_score') and contract.liquidity_score is not None:
+            return contract.liquidity_score
+        
+        # Otherwise calculate from bid/ask spread, volume, and open interest
+        return self._calculate_liquidity_score(contract)
+
+    def _calculate_liquidity_score(self, contract: OptionContract) -> float:
+        """Calculate liquidity score from contract metrics.
+        
+        Args:
+            contract: OptionContract to score
+            
+        Returns:
+            Liquidity score 0-100
+        """
+        score = 0.0
+        
+        # Bid-ask spread component (0-25 points)
+        if contract.bid and contract.ask:
+            mid_price = (contract.bid + contract.ask) / 2
+            if mid_price > 0:
+                spread_pct = (contract.ask - contract.bid) / mid_price
+                # Tight spread (< 1%) = 25 points, wide spread (> 5%) = 0 points
+                if spread_pct < 0.01:
+                    score += 25.0
+                elif spread_pct > 0.05:
+                    score += 0.0
+                else:
+                    score += 25.0 * (1.0 - (spread_pct - 0.01) / 0.04)
+        
+        # Volume component (0-25 points)
+        volume = contract.volume or 0
+        if volume >= 100:
+            score += 25.0
+        elif volume >= 10:
+            score += 25.0 * (volume / 100.0)
+        
+        # Open interest component (0-25 points)
+        oi = contract.open_interest or 0
+        if oi >= 500:
+            score += 25.0
+        elif oi >= 20:
+            score += 25.0 * (oi / 500.0)
+        
+        # Days to expiration component (0-25 points)
+        dte = contract.days_to_expiration or 30
+        # Optimal window: 15-45 days
+        if 15 <= dte <= 45:
+            score += 25.0
+        elif 7 <= dte < 15 or 45 < dte <= 60:
+            score += 12.5  # Acceptable but not optimal
+        
+        return min(score, 100.0)
+
+    def _calculate_premium_income(self, contract: OptionContract) -> float:
+        """Calculate premium income from bid price.
+        
+        Args:
+            contract: OptionContract to calculate from
+            
+        Returns:
+            Premium income per contract (bid price * 100)
+        """
+        if contract.bid is None:
             return 0.0
-        return put.bid * 100  # 1 contract = 100 shares
+        return contract.bid * 100.0
+
+    def _calculate_assignment_risk(self, contract: OptionContract) -> float:
+        """Estimate probability of assignment.
+        
+        For OTM puts, assignment risk is roughly delta (probability ITM at expiration).
+        
+        Args:
+            contract: OptionContract to estimate from
+            
+        Returns:
+            Assignment risk as probability (0.0 to 1.0)
+        """
+        if contract.delta is not None:
+            # For puts, delta is negative; use absolute value
+            return abs(contract.delta)
+        
+        # Fallback: estimate from strike vs current price
+        if contract.underlying_price and contract.strike:
+            otm_pct = (contract.underlying_price - contract.strike) / contract.underlying_price
+            # Rough estimate: 2% OTM ≈ 20% assignment risk, 15% OTM ≈ 5% risk
+            if otm_pct <= 0.02:
+                return 0.20
+            elif otm_pct >= 0.15:
+                return 0.05
+            else:
+                return 0.20 - (otm_pct - 0.02) / 0.13 * 0.15
+        
+        return 0.10  # Default estimate
 
     def _calculate_cash_requirement(self, strike: float) -> float:
         """Calculate cash required to cover assignment.
         
         Args:
-            strike: Strike price of the put
+            strike: Strike price
             
         Returns:
-            Cash required in dollars (strike * 100 shares per contract)
+            Cash required (strike * 100 shares per contract)
         """
-        return strike * 100 * self.CASH_REQUIREMENT_MULTIPLIER
+        return strike * 100.0 * self.CASH_REQUIREMENT_MULTIPLIER
 
-    def _calculate_assignment_risk(self, put: OptionContract) -> float:
-        """Estimate probability of assignment.
-        
-        Uses delta as proxy for assignment probability.
-        For puts, delta ranges from -1 to 0, so we use absolute value.
-        
-        Args:
-            put: Put option contract
-            
-        Returns:
-            Assignment probability (0.0 to 1.0)
-        """
-        if put.delta is None:
-            # Estimate from moneyness if delta not available
-            return 0.3  # Default 30% assignment risk
-        # For puts, delta is negative; use absolute value
-        return abs(put.delta)
-
-    def _calculate_breakeven(self, strike: float, premium: float) -> float:
+    def _calculate_breakeven(self, strike: float, premium_income: float) -> float:
         """Calculate breakeven price if assigned.
         
         Args:
-            strike: Strike price of the put
-            premium: Premium collected
+            strike: Strike price
+            premium_income: Premium collected
             
         Returns:
-            Breakeven price per share
+            Breakeven price
         """
-        premium_per_share = premium / 100  # Convert to per-share basis
-        return strike - premium_per_share
-
-    def _calculate_max_loss(self, strike: float, premium: float) -> float:
-        """Calculate maximum loss if assigned.
-        
-        Args:
-            strike: Strike price of the put
-            premium: Premium collected
-            
-        Returns:
-            Maximum loss in dollars
-        """
-        # Max loss is strike * 100 shares minus premium collected
-        return (strike * 100) - premium
+        return strike - (premium_income / 100.0)
 
     def _calculate_annualized_return(self, premium_income: float, strike: float, days_to_expiration: int) -> float:
         """Calculate annualized return on cash requirement.
         
         Args:
-            premium_income: Premium collected in dollars
-            strike: Strike price of the put
+            premium_income: Premium collected
+            strike: Strike price
             days_to_expiration: Days until expiration
             
         Returns:
             Annualized return as decimal (e.g., 0.25 for 25%)
         """
-        if days_to_expiration <= 0:
+        cash_req = self._calculate_cash_requirement(strike)
+        if cash_req <= 0:
             return 0.0
         
-        cash_required = strike * 100
-        if cash_required <= 0:
-            return 0.0
-        
-        # Return on cash requirement
-        return_pct = premium_income / cash_required
-        
-        # Annualize
-        days_per_year = 365
-        annualized = return_pct * (days_per_year / days_to_expiration)
-        
+        return_pct = premium_income / cash_req
+        annualized = return_pct * (365.0 / max(days_to_expiration, 1))
         return annualized
 
-    def _generate_warnings(self, put: OptionContract, assignment_risk: float, cash_req: float, available_cash: float) -> List[str]:
-        """Generate warnings for a put option.
+    def _calculate_max_loss(self, strike: float, premium_income: float) -> float:
+        """Calculate maximum loss if assigned.
         
         Args:
-            put: Put option contract
-            assignment_risk: Probability of assignment
-            cash_req: Cash required for assignment
-            available_cash: Available cash
+            strike: Strike price
+            premium_income: Premium collected
             
         Returns:
-            List of warning messages
+            Maximum loss (strike * 100 - premium collected)
         """
-        warnings = []
-        
-        if assignment_risk > 0.5:
-            warnings.append(f"High assignment risk: {assignment_risk:.1%}")
-        
-        if cash_req > available_cash * 0.8:
-            warnings.append(f"High cash requirement: {cash_req / available_cash:.1%} of available cash")
-        
-        if put.implied_volatility and put.implied_volatility < 0.15:
-            warnings.append("Low implied volatility - premium may be limited")
-        
-        if put.volume and put.volume < 20:
-            warnings.append("Low volume - may have difficulty closing position")
-        
-        return warnings
+        return (strike * 100.0) - premium_income
 
-    def _build_reason(self, symbol: str, strike: float, expiration: str, premium_income: float, annualized_return: float, assignment_risk: float, cash_requirement: float, breakeven: float) -> str:
+    def _build_reason(self, symbol: str, strike: float, expiration: str, premium_income: float,
+                      annualized_return: float, assignment_risk: float, cash_requirement: float,
+                      breakeven: float) -> str:
         """Build explanation for the signal.
         
         Args:
@@ -470,7 +510,7 @@ class CashSecuredPutStrategy(Strategy):
             expiration: Expiration date
             premium_income: Premium collected
             annualized_return: Annualized return
-            assignment_risk: Assignment probability
+            assignment_risk: Assignment risk
             cash_requirement: Cash required
             breakeven: Breakeven price
             
@@ -478,10 +518,9 @@ class CashSecuredPutStrategy(Strategy):
             Explanation string
         """
         return (
-            f"Sell {symbol} ${strike:.2f} put expiring {expiration}. "
+            f"Cash-secured put opportunity: Sell {symbol} ${strike:.2f} put expiring {expiration}. "
             f"Collect ${premium_income:.2f} premium ({annualized_return:.1%} annualized return). "
             f"Assignment risk: {assignment_risk:.1%}. "
             f"Breakeven: ${breakeven:.2f}. "
-            f"Cash required: ${cash_requirement:.2f}. "
-            f"If assigned, you will buy 100 shares at ${strike:.2f}."
+            f"Cash required: ${cash_requirement:.2f}."
         )

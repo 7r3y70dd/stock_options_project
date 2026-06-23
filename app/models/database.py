@@ -121,6 +121,7 @@ class OptionContract(Base):
     theoretical_price = Column(Float, nullable=True)  # Black-Scholes theoretical price
     pricing_difference = Column(Float, nullable=True)  # Market mid-price minus theoretical price
     pricing_assessment = Column(String(50), nullable=True)  # "overpriced", "underpriced", "fair"
+    liquidity_score = Column(Float, nullable=True, default=0.0)  # Liquidity score 0-100
     last_updated = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
     # Relationships
@@ -249,9 +250,9 @@ class BacktestResult(Base):
     win_rate = Column(Float, nullable=False)
     max_drawdown_pct = Column(Float, nullable=False)
     sharpe_ratio = Column(Float, nullable=True)
-    parameters = Column(Text, nullable=True)  # JSON string of strategy parameters
-    results_summary = Column(Text, nullable=True)  # JSON string of detailed results
+    parameters = Column(Text, nullable=True)  # JSON str
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
     # Relationships
     user = relationship("User", back_populates="backtest_results")
