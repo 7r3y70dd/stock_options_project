@@ -2,6 +2,7 @@
 
 from enum import Enum
 from typing import Dict, Optional
+from dataclasses import dataclass
 
 
 class RiskLevel(str, Enum):
@@ -21,8 +22,15 @@ class RejectionReason(str, Enum):
     BID_ASK_SPREAD_TOO_WIDE = "bid_ask_spread_too_wide"
     OUTSIDE_EXPIRATION_WINDOW = "outside_expiration_window"
     UNACCEPTABLE_GREEKS = "unacceptable_greeks"
+    MAX_LOSS_EXCEEDED = "max_loss_exceeded"
+    MAX_CONTRACTS_EXCEEDED = "max_contracts_exceeded"
+    MAX_DAILY_LOSS_EXCEEDED = "max_daily_loss_exceeded"
+    MAX_OPEN_POSITIONS_EXCEEDED = "max_open_positions_exceeded"
+    EARNINGS_WINDOW_RESTRICTED = "earnings_window_restricted"
+    LIVE_TRADING_NOT_APPROVED = "live_trading_not_approved"
 
 
+@dataclass
 class RiskGuardrail:
     """Base class for risk guardrails."""
     pass
@@ -83,3 +91,13 @@ def get_risk_config(risk_level: RiskLevel) -> RiskConfig:
         ),
     }
     return configs.get(risk_level, configs[RiskLevel.MEDIUM])
+
+
+# Export commonly used classes for convenience
+__all__ = [
+    "RiskLevel",
+    "RejectionReason",
+    "RiskGuardrail",
+    "RiskConfig",
+    "get_risk_config",
+]
