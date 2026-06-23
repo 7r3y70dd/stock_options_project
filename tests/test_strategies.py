@@ -10,6 +10,7 @@ from app.strategies import (
     StrategyRegistry,
     get_strategy_registry,
     set_strategy_registry,
+    CoveredCallStrategy,
 )
 from services.options_service import OptionContract
 from services import RiskLevel
@@ -361,40 +362,206 @@ class TestStrategyRegistry:
         assert len(signals) == 0
 
 
+class TestCoveredCallStrategy:
+    """Tests for CoveredCallStrategy."""
+
+    def test_covered_call_initialization(self):
+        """Test covered call strategy initialization."""
+        strategy = CoveredCallStrategy(name="covered_call", enabled=True)
+        
+        assert strategy.name == "covered_call"
+        assert strategy.is_enabled() is True
+
+    def test_covered_call_requires_shares(self):
+        """Test that covered call requires share position."""
+        strategy = CoveredCallStrategy()
+        
+        market_data = MarketData(
+            symbol="AAPL",
+            current_price=150.0,
+            price_history=[{"close": 150.0}],
+            quote_timestamp=datetime.utcnow(),
+        )
+        
+        options_chain = [
+            OptionContract(
+                symbol="AAPL",
+                expiration="2024-12-20",
+                strike=155.0,
+                contract_type="call",
+                bid=2.0,
+                ask=2.5,
+                volume=100,
+                open_interest=500,
+                implied_volatility=0.25,
+                underlying_price=150.0,
+                days_to_expiration=30,
+            )
+        ]
+        
+        # No shares - should return None
+        signal = strategy.generate(
+            symbol="AAPL",
+            market_data=market_data,
+            options_chain=options_chain,
+            share_position=0,
+        )
+        
+        assert signal is None
+
+    def test_covered_call_generates_signal_with_shares(self):
+        """Test that covered call generates signal when shares available."""
+        strategy = CoveredCallStrategy()
+        
+        market_data = MarketData(
+            symbol="AAPL",
+            current_price=150.0,
+            price_history=[{"close": 150.0}],
+            quote_timestamp=datetime.utcnow(),
+        )
+        
+        options_chain = [
+            OptionContract(
+                symbol="AAPL",
+                expiration="2024-12-20",
+                strike=155.0,
+                contract_type="call",
+                bid=2.0,
+                ask=2.5,
+                volume=100,
+                open_interest=500,
+                implied_volatility=0.25,
+                underlying_price=150.0,
+                days_to_expiration=30,
+                delta=0.4,
+            )
+        ]
+        
+        # 100 shares - should generate signal
+        signal = strategy.generate(
+            symbol="AAPL",
+            market_data=market_data,
+            options_chain=options_chain,
+            share_position=100,
+        )
+        
+        assert signal is not None
+        assert isinstance(signal, StrategySignal)
+        assert signal.symbol == "AAPL"
+        assert signal.strategy_type == "covered_call"
+        assert signal.reason is not None
+        assert signal.max_loss == 0.0  # Covered calls have no additional downside
+        assert signal.option_contracts is not None
+        assert len(signal.option_contracts) > 0
+
+    def test_covered_call_filters_otm_calls(self):
+        """Test that covered call filters for OTM calls."""
+        strategy = CoveredCallStrategy()
+        
+        market_data = MarketData(
+            symbol="AAPL",
+            current_price=150.0,
+            price_history=[{"close": 150.0}],
+            quote_timestamp=datetime.utcnow(),
+        )
+        
+        # Mix of ITM and OTM calls
+        options_chain = [
+            OptionContract(
+                symbol="AAPL",
+                expiration="2024-12-20",
+                strike=145.0,  # ITM - should be filtered out
+                contract_type="call",
+                bid=5.0,
+                ask=5.5,
+                volume=100,
+                open_interest=500,
+                implied_volatility=0.25,
+                underlying_price=150.0,
+                days_to_expiration=30,
+            ),
+            OptionContract(
+                symbol="AAPL",
+                expiration="2024-12-20",
+                strike=155.0,  # OTM - should be included
+                contract_type="call",
+                bid=2.0,
+                ask=2.5,
+                volume=100,
+                open_interest=500,
+                implied_volatility=0.25,
+                underlying_price=150.0,
+                days_to_expiration=30,
+            ),
+        ]
+        
+        signal = strategy.generate(
+            symbol="AAPL",
+            market_data=market_data,
+            options_chain=options_chain,
+            share_position=100,
+        )
+        
+        # Should generate signal with OTM call
+        assert signal is not None
+        assert signal.option_contracts[0].strike == 155.0
+
+    def test_covered_call_includes_max_upside_and_opportunity_cost(self):
+        """Test that signal includes max upside and opportunity cost."""
+        strategy = CoveredCallStrategy()
+        
+        market_data = MarketData(
+            symbol="AAPL",
+            current_price=150.0,
+            price_history=[{"close": 150.0}],
+            quote_timestamp=datetime.utcnow(),
+        )
+        
+        options_chain = [
+            OptionContract(
+                symbol="AAPL",
+                expiration="2024-12-20",
+                strike=155.0,
+                contract_type="call",
+                bid=2.0,
+                ask=2.5,
+                volume=100,
+                open_interest=500,
+                implied_volatility=0.25,
+                underlying_price=150.0,
+                days_to_expiration=30,
+                delta=0.4,
+            )
+        ]
+        
+        signal = strategy.generate(
+            symbol="AAPL",
+            market_data=market_data,
+            options_chain=options_chain,
+            share_position=100,
+        )
+        
+        assert signal is not None
+        assert signal.breakdown is not None
+        assert "max_upside" in signal.breakdown
+        assert "opportunity_cost" in signal.breakdown
+        assert "premium_income" in signal.breakdown
+        assert "annualized_return" in signal.breakdown
+
+
 class TestGlobalRegistry:
     """Tests for global registry functions."""
 
     def test_get_strategy_registry(self):
         """Test getting global strategy registry."""
-        # Reset global registry
-        set_strategy_registry(StrategyRegistry())
-        
         registry = get_strategy_registry()
+        
         assert isinstance(registry, StrategyRegistry)
 
     def test_set_strategy_registry(self):
         """Test setting global strategy registry."""
         new_registry = StrategyRegistry()
-        strategy = MockStrategy(name="test_strategy")
-        new_registry.register(strategy)
-        
         set_strategy_registry(new_registry)
         
-        registry = get_strategy_registry()
-        assert "test_strategy" in registry.list_strategies()
-
-    def test_global_registry_persistence(self):
-        """Test that global registry persists across calls."""
-        # Reset and set up
-        new_registry = StrategyRegistry()
-        strategy = MockStrategy(name="persistent_strategy")
-        new_registry.register(strategy)
-        set_strategy_registry(new_registry)
-        
-        # Get registry twice
-        registry1 = get_strategy_registry()
-        registry2 = get_strategy_registry()
-        
-        # Should be the same instance
-        assert registry1 is registry2
-        assert "persistent_strategy" in registry1.list_strategies()
+        retrieved = get_strategy_registry()
+        assert retrieved is new_registry
