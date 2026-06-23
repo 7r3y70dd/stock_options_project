@@ -104,6 +104,16 @@ class Config:
     ENABLED_STRATEGIES: list = os.getenv("ENABLED_STRATEGIES", "").split(",") if os.getenv("ENABLED_STRATEGIES") else []
     DISABLED_STRATEGIES: list = os.getenv("DISABLED_STRATEGIES", "").split(",") if os.getenv("DISABLED_STRATEGIES") else []
 
+    # Covered Call Strategy Configuration
+    COVERED_CALL_MIN_SHARES: int = int(os.getenv("COVERED_CALL_MIN_SHARES", "100"))
+    COVERED_CALL_OTM_THRESHOLD: float = float(os.getenv("COVERED_CALL_OTM_THRESHOLD", "0.02"))
+    COVERED_CALL_MAX_OTM_THRESHOLD: float = float(os.getenv("COVERED_CALL_MAX_OTM_THRESHOLD", "0.15"))
+    COVERED_CALL_MIN_DTE: int = int(os.getenv("COVERED_CALL_MIN_DTE", "7"))
+    COVERED_CALL_MAX_DTE: int = int(os.getenv("COVERED_CALL_MAX_DTE", "60"))
+    COVERED_CALL_MIN_VOLUME: int = int(os.getenv("COVERED_CALL_MIN_VOLUME", "10"))
+    COVERED_CALL_MIN_OPEN_INTEREST: int = int(os.getenv("COVERED_CALL_MIN_OPEN_INTEREST", "20"))
+    COVERED_CALL_MAX_SPREAD_PCT: float = float(os.getenv("COVERED_CALL_MAX_SPREAD_PCT", "0.05"))
+
     # Logging
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
 
