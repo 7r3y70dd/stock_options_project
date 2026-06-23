@@ -90,8 +90,9 @@ class OptionContract(Base):
     """Option contract model for storing normalized option chain data.
     
     Stores option contract data including Greeks (delta, gamma, theta, vega),
-    market data (bid, ask, volume, open_interest), and volatility metrics
-    (implied volatility, historical volatility, and volatility context).
+    market data (bid, ask, volume, open_interest), volatility metrics
+    (implied volatility, historical volatility, and volatility context),
+    and theoretical pricing (theoretical_price, pricing_difference).
     """
 
     __tablename__ = "option_contracts"
@@ -117,6 +118,9 @@ class OptionContract(Base):
     earnings_date = Column(String(10), nullable=True)  # YYYY-MM-DD
     historical_volatility = Column(Float, nullable=True)  # Historical volatility calculated from price data
     volatility_context = Column(String(50), nullable=True)  # "expensive", "cheap", "fair", or None
+    theoretical_price = Column(Float, nullable=True)  # Black-Scholes theoretical price
+    pricing_difference = Column(Float, nullable=True)  # Market mid-price minus theoretical price
+    pricing_assessment = Column(String(50), nullable=True)  # "overpriced", "underpriced", "fair"
     last_updated = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
     # Relationships
