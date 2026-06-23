@@ -312,7 +312,7 @@ class GreeksAnalyzer:
             if contract.theta < thresholds["min_theta"]:
                 warnings.append(
                     f"Theta {contract.theta:.4f} exceeds {risk_level.value} risk level threshold "
-                    f"({thresholds['min_theta']:.4f}). High time decay risk."
+                    f"({thresholds['min_theta']:.4f}). High time decay."
                 )
                 acceptable = False
         
@@ -329,113 +329,177 @@ class GreeksAnalyzer:
         
         return acceptable, warnings, scores
 
-    @staticmethod
-    def calculate_greeks_score(
-        contract: OptionContract,
-        risk_level: RiskLevel = RiskLevel.MEDIUM,
-    ) -> float:
-        """Calculate overall Greeks score for a contract.
-        
-        Args:
-            contract: OptionContract to score
-            risk_level: Risk level for threshold comparison
-            
-        Returns:
-            Greeks score from 0.0 (worst) to 1.0 (best)
-        """
-        _, _, scores = GreeksAnalyzer.assess_greek_profile(contract, risk_level)
-        
-        if not scores:
-            return 1.0  # Default to perfect score if no Greeks data
-        
-        # Average the individual Greek scores
-        avg_score = sum(scores.values()) / len(scores) if scores else 1.0
-        
-        # Invert so that lower scores (better Greeks) result in higher overall score
-        return 1.0 - min(avg_score, 1.0)
 
-
-class PricingAnalyzer:
-    """Analyzer for theoretical option pricing using QuantLib.
+class RiskEngine:
+    """Engine for validating trades against risk guardrails.
     
-    Compares market prices with Black-Scholes theoretical prices to identify
-    mispriced options.
+    Validates option trades against a comprehensive set of risk guardrails
+    based on the configured risk level (LOW, MEDIUM, HIGH).
     """
 
-    def __init__(self, risk_free_rate: float = 0.05, dividend_yield: float = 0.0):
-        """Initialize pricing analyzer.
+    def __init__(self, risk_level: RiskLevel = RiskLevel.MEDIUM):
+        """Initialize RiskEngine with a risk level.
         
         Args:
-            risk_free_rate: Risk-free interest rate as decimal (default: 5%)
-            dividend_yield: Dividend yield as decimal (default: 0%)
+            risk_level: Risk level for guardrail thresholds
         """
-        self.risk_free_rate = risk_free_rate
-        self.dividend_yield = dividend_yield
-        self.pricing_engine = None
+        self.risk_level = risk_level
+        self.config = get_risk_config(risk_level)
+
+    def validate_trade(
+        self,
+        contract: OptionContract,
+        max_loss_pct: float,
+        num_contracts: int,
+        current_daily_loss_pct: float = 0.0,
+        current_open_positions: int = 0,
+        is_live_trading: bool = False,
+        user_approved_live_trading: bool = False,
+    ) -> RiskGuardrail:
+        """Validate a trade against all risk guardrails.
         
-        if QUANTLIB_AVAILABLE:
+        Args:
+            contract: OptionContract to validate
+            max_loss_pct: Maximum loss percentage for this trade
+            num_contracts: Number of contracts to trade
+            current_daily_loss_pct: Current daily loss percentage
+            current_open_positions: Current number of open positions
+            is_live_trading: Whether this is a live trading request
+            user_approved_live_trading: Whether user has approved live trading
+            
+        Returns:
+            RiskGuardrail object with validation result
+        """
+        # Check max loss per trade
+        if max_loss_pct > self.config.max_loss_per_trade_pct:
+            return RiskGuardrail(
+                passed=False,
+                reason=RejectionReason.MAX_LOSS_EXCEEDED,
+                message=f"Max loss per trade {max_loss_pct:.2f}% exceeds limit {self.config.max_loss_per_trade_pct:.2f}%",
+            )
+        
+        # Check max contracts per trade
+        if num_contracts > self.config.max_contracts_per_trade:
+            return RiskGuardrail(
+                passed=False,
+                reason=RejectionReason.MAX_CONTRACTS_EXCEEDED,
+                message=f"Number of contracts {num_contracts} exceeds limit {self.config.max_contracts_per_trade}",
+            )
+        
+        # Check max daily loss
+        total_daily_loss = current_daily_loss_pct + max_loss_pct
+        if total_daily_loss > self.config.max_daily_loss_pct:
+            return RiskGuardrail(
+                passed=False,
+                reason=RejectionReason.MAX_DAILY_LOSS_EXCEEDED,
+                message=f"Total daily loss {total_daily_loss:.2f}% exceeds limit {self.config.max_daily_loss_pct:.2f}%",
+            )
+        
+        # Check max open positions
+        if current_open_positions >= self.config.max_open_positions:
+            return RiskGuardrail(
+                passed=False,
+                reason=RejectionReason.MAX_OPEN_POSITIONS_EXCEEDED,
+                message=f"Open positions {current_open_positions} at or exceeds limit {self.config.max_open_positions}",
+            )
+        
+        # Check bid-ask spread
+        if contract.bid is not None and contract.ask is not None and contract.bid > 0:
+            spread_pct = (contract.ask - contract.bid) / contract.bid
+            if spread_pct > self.config.max_bid_ask_spread_pct:
+                return RiskGuardrail(
+                    passed=False,
+                    reason=RejectionReason.BID_ASK_SPREAD_TOO_WIDE,
+                    message=f"Bid-ask spread {spread_pct:.2%} exceeds limit {self.config.max_bid_ask_spread_pct:.2%}",
+                )
+        
+        # Check volume
+        if contract.volume is not None and contract.volume < self.config.min_volume:
+            return RiskGuardrail(
+                passed=False,
+                reason=RejectionReason.VOLUME_TOO_LOW,
+                message=f"Volume {contract.volume} below minimum {self.config.min_volume}",
+            )
+        
+        # Check open interest
+        if contract.open_interest is not None and contract.open_interest < self.config.min_open_interest:
+            return RiskGuardrail(
+                passed=False,
+                reason=RejectionReason.OPEN_INTEREST_TOO_LOW,
+                message=f"Open interest {contract.open_interest} below minimum {self.config.min_open_interest}",
+            )
+        
+        # Check earnings window
+        if contract.earnings_date:
             try:
-                self.pricing_engine = QuantLibPricingEngine()
-            except ImportError:
-                pass
-
-    def calculate_theoretical_price(
-        self,
-        contract: OptionContract,
-    ) -> Optional[float]:
-        """Calculate theoretical price for a contract.
+                earnings_dt = datetime.fromisoformat(contract.earnings_date)
+                now = datetime.now()
+                days_to_earnings = (earnings_dt - now).days
+                if abs(days_to_earnings) < self.config.earnings_window_days:
+                    return RiskGuardrail(
+                        passed=False,
+                        reason=RejectionReason.EARNINGS_WINDOW_RESTRICTED,
+                        message=f"Trade within {self.config.earnings_window_days} day earnings window",
+                    )
+            except (ValueError, TypeError):
+                pass  # Invalid earnings date format, skip check
         
-        Args:
-            contract: OptionContract to price
-            
-        Returns:
-            Theoretical price, or None if calculation fails or QuantLib unavailable
-        """
-        if not self.pricing_engine or not QUANTLIB_AVAILABLE:
-            return None
+        # Check live trading approval
+        if is_live_trading and not user_approved_live_trading:
+            return RiskGuardrail(
+                passed=False,
+                reason=RejectionReason.LIVE_TRADING_NOT_APPROVED,
+                message="Live trading is disabled by default. User approval required.",
+            )
         
-        if not contract.underlying_price or not contract.implied_volatility or contract.days_to_expiration is None:
-            return None
-        
-        time_to_expiration = contract.days_to_expiration / 365.0
-        
-        return self.pricing_engine.calculate_theoretical_price(
-            underlying_price=contract.underlying_price,
-            strike=contract.strike,
-            time_to_expiration=time_to_expiration,
-            risk_free_rate=self.risk_free_rate,
-            volatility=contract.implied_volatility,
-            contract_type=contract.contract_type,
-            dividend_yield=self.dividend_yield,
+        # All checks passed
+        return RiskGuardrail(
+            passed=True,
+            reason=None,
+            message="Trade passed all risk guardrails",
         )
 
-    def compare_prices(
-        self,
-        contract: OptionContract,
-    ) -> Tuple[Optional[float], Optional[float], Optional[str]]:
-        """Compare market price with theoretical price.
+
+class OptionsChainFilter:
+    """Filter for options chains based on risk guardrails."""
+
+    def __init__(self, risk_engine: RiskEngine):
+        """Initialize filter with a risk engine.
         
         Args:
-            contract: OptionContract to analyze
+            risk_engine: RiskEngine instance for validation
+        """
+        self.risk_engine = risk_engine
+
+    def filter_contracts(
+        self,
+        contracts: List[OptionContract],
+        max_loss_pct: float,
+        num_contracts: int = 1,
+    ) -> List[FilteredContract]:
+        """Filter a list of contracts.
+        
+        Args:
+            contracts: List of OptionContract objects to filter
+            max_loss_pct: Maximum loss percentage for validation
+            num_contracts: Number of contracts per trade
             
         Returns:
-            Tuple of (theoretical_price, pricing_difference, assessment)
+            List of FilteredContract objects with pass/fail status
         """
-        if not contract.bid or not contract.ask:
-            return None, None, None
-        
-        # Calculate market mid-price
-        market_mid_price = (contract.bid + contract.ask) / 2.0
-        
-        # Calculate theoretical price
-        theoretical_price = self.calculate_theoretical_price(contract)
-        
-        if theoretical_price is None:
-            return theoretical_price, None, None
-        
-        # Compare prices
-        difference, assessment = QuantLibPricingEngine.compare_prices(
-            market_mid_price, theoretical_price
-        )
-        
-        return theoretical_price, difference, assessment
+        results = []
+        for contract in contracts:
+            guardrail = self.risk_engine.validate_trade(
+                contract,
+                max_loss_pct=max_loss_pct,
+                num_contracts=num_contracts,
+            )
+            results.append(
+                FilteredContract(
+                    contract=contract if guardrail.passed else None,
+                    passed=guardrail.passed,
+                    rejection_reason=guardrail.reason,
+                    rejection_message=guardrail.message,
+                )
+            )
+        return results
