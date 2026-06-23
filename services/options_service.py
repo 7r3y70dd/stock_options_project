@@ -4,7 +4,7 @@ Provides risk-level-aware scoring, filtering, ranking, and volatility analysis o
 """
 
 from typing import Dict, List, Optional, Tuple
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from datetime import datetime, timedelta
 import math
 import statistics
@@ -31,6 +31,10 @@ class OptionContract:
     earnings_date: Optional[str] = None  # ISO format date string
     historical_volatility: Optional[float] = None  # Historical volatility from price data
     volatility_context: Optional[str] = None  # "expensive", "cheap", "fair"
+    delta: Optional[float] = None  # Greek: directional exposure
+    gamma: Optional[float] = None  # Greek: acceleration risk
+    theta: Optional[float] = None  # Greek: time decay
+    vega: Optional[float] = None  # Greek: volatility sensitivity
 
 
 @dataclass
@@ -53,6 +57,11 @@ class ScoredOption:
     historical_volatility: Optional[float] = None  # HV for context
     iv_hv_ratio: Optional[float] = None  # IV/HV ratio
     volatility_context: Optional[str] = None  # "expensive", "cheap", "fair"
+    delta: Optional[float] = None  # Greek: directional exposure
+    gamma: Optional[float] = None  # Greek: acceleration risk
+    theta: Optional[float] = None  # Greek: time decay
+    vega: Optional[float] = None  # Greek: volatility sensitivity
+    greeks_summary: Optional[Dict[str, float]] = field(default_factory=dict)  # Summary of Greeks analysis
 
 
 @dataclass
@@ -175,6 +184,163 @@ class VolatilityAnalyzer:
         return ratio, context
 
 
+class GreeksAnalyzer:
+    """Analyzer for option Greeks (delta, gamma, theta, vega).
+    
+    Provides methods to analyze Greeks and assess risk based on Greek profiles.
+    Greeks measure different dimensions of option risk:
+    - Delta: directional exposure (0-1 for calls, -1-0 for puts)
+    - Gamma: acceleration risk (how fast delta changes)
+    - Theta: time decay (daily loss from time passage)
+    - Vega: volatility sensitivity (change per 1% IV change)
+    """
+
+    # Greeks thresholds by risk level
+    GREEKS_THRESHOLDS = {
+        RiskLevel.LOW: {
+            "max_delta": 0.30,  # Conservative directional exposure
+            "max_gamma": 0.05,  # Low acceleration risk
+            "min_theta": -0.02,  # Prefer time decay in our favor
+            "max_vega": 0.10,  # Low volatility sensitivity
+        },
+        RiskLevel.MEDIUM: {
+            "max_delta": 0.60,  # Moderate directional exposure
+            "max_gamma": 0.10,  # Moderate acceleration risk
+            "min_theta": -0.05,  # Accept some time decay
+            "max_vega": 0.20,  # Moderate volatility sensitivity
+        },
+        RiskLevel.HIGH: {
+            "max_delta": 0.90,  # Aggressive directional exposure
+            "max_gamma": 0.20,  # Higher acceleration risk
+            "min_theta": -0.10,  # Accept significant time decay
+            "max_vega": 0.40,  # Higher volatility sensitivity
+        },
+    }
+
+    @staticmethod
+    def analyze_greeks(
+        contract: OptionContract,
+    ) -> Dict[str, float]:
+        """Analyze Greeks for a contract.
+        
+        Args:
+            contract: OptionContract to analyze
+            
+        Returns:
+            Dictionary with Greeks analysis including absolute values and risk scores
+        """
+        analysis = {}
+        
+        if contract.delta is not None:
+            analysis["delta"] = contract.delta
+            analysis["delta_abs"] = abs(contract.delta)
+        
+        if contract.gamma is not None:
+            analysis["gamma"] = contract.gamma
+            analysis["gamma_abs"] = abs(contract.gamma)
+        
+        if contract.theta is not None:
+            analysis["theta"] = contract.theta
+            analysis["theta_abs"] = abs(contract.theta)
+        
+        if contract.vega is not None:
+            analysis["vega"] = contract.vega
+            analysis["vega_abs"] = abs(contract.vega)
+        
+        return analysis
+
+    @staticmethod
+    def assess_greek_profile(
+        contract: OptionContract,
+        risk_level: RiskLevel = RiskLevel.MEDIUM,
+    ) -> Tuple[bool, List[str], Dict[str, float]]:
+        """Assess if contract's Greek profile is acceptable for risk level.
+        
+        Args:
+            contract: OptionContract to assess
+            risk_level: Risk level for threshold comparison
+            
+        Returns:
+            Tuple of (acceptable: bool, warnings: List[str], scores: Dict[str, float])
+        """
+        thresholds = GreeksAnalyzer.GREEKS_THRESHOLDS.get(
+            risk_level, GreeksAnalyzer.GREEKS_THRESHOLDS[RiskLevel.MEDIUM]
+        )
+        
+        warnings = []
+        scores = {}
+        acceptable = True
+        
+        # Check delta (directional exposure)
+        if contract.delta is not None:
+            delta_abs = abs(contract.delta)
+            scores["delta_score"] = min(delta_abs / thresholds["max_delta"], 1.0)
+            if delta_abs > thresholds["max_delta"]:
+                warnings.append(
+                    f"Delta {contract.delta:.3f} exceeds {risk_level.value} risk level threshold "
+                    f"({thresholds['max_delta']:.3f}). High directional exposure."
+                )
+                acceptable = False
+        
+        # Check gamma (acceleration risk)
+        if contract.gamma is not None:
+            gamma_abs = abs(contract.gamma)
+            scores["gamma_score"] = min(gamma_abs / thresholds["max_gamma"], 1.0)
+            if gamma_abs > thresholds["max_gamma"]:
+                warnings.append(
+                    f"Gamma {contract.gamma:.4f} exceeds {risk_level.value} risk level threshold "
+                    f"({thresholds['max_gamma']:.4f}). High acceleration risk."
+                )
+                acceptable = False
+        
+        # Check theta (time decay)
+        if contract.theta is not None:
+            scores["theta_score"] = min(abs(contract.theta) / abs(thresholds["min_theta"]), 1.0)
+            if contract.theta < thresholds["min_theta"]:
+                warnings.append(
+                    f"Theta {contract.theta:.4f} exceeds {risk_level.value} risk level threshold "
+                    f"({thresholds['min_theta']:.4f}). High time decay risk."
+                )
+                acceptable = False
+        
+        # Check vega (volatility sensitivity)
+        if contract.vega is not None:
+            vega_abs = abs(contract.vega)
+            scores["vega_score"] = min(vega_abs / thresholds["max_vega"], 1.0)
+            if vega_abs > thresholds["max_vega"]:
+                warnings.append(
+                    f"Vega {contract.vega:.4f} exceeds {risk_level.value} risk level threshold "
+                    f"({thresholds['max_vega']:.4f}). High volatility sensitivity."
+                )
+                acceptable = False
+        
+        return acceptable, warnings, scores
+
+    @staticmethod
+    def calculate_greeks_score(
+        contract: OptionContract,
+        risk_level: RiskLevel = RiskLevel.MEDIUM,
+    ) -> float:
+        """Calculate overall Greeks score (0-1) for a contract.
+        
+        Args:
+            contract: OptionContract to score
+            risk_level: Risk level for threshold comparison
+            
+        Returns:
+            Greeks score from 0 (worst) to 1 (best)
+        """
+        _, _, scores = GreeksAnalyzer.assess_greek_profile(contract, risk_level)
+        
+        if not scores:
+            return 1.0  # No Greeks data, assume acceptable
+        
+        # Average of all Greek scores (lower is better)
+        avg_score = sum(scores.values()) / len(scores)
+        # Invert so higher score is better
+        return 1.0 - min(avg_score, 1.0)
+
+
 class OptionsChainFilter:
     """Filter for option contracts based on quality and risk criteria."""
 
@@ -187,6 +353,7 @@ class OptionsChainFilter:
         self.risk_level = risk_level
         self.config = get_risk_config(risk_level)
         self.volatility_analyzer = VolatilityAnalyzer()
+        self.greeks_analyzer = GreeksAnalyzer()
 
     def filter_contracts(
         self, contracts: List[OptionContract]
@@ -269,6 +436,18 @@ class OptionsChainFilter:
                 rejection_message=f"Contract expiration ({contract.days_to_expiration} days) is outside window ({self.config.min_days_to_expiration}-{self.config.max_days_to_expiration} days) for {self.risk_level.value} risk level.",
             )
 
+        # Check Greeks profile
+        greeks_acceptable, greeks_warnings, _ = self.greeks_analyzer.assess_greek_profile(
+            contract, self.risk_level
+        )
+        if not greeks_acceptable:
+            return FilteredContract(
+                contract=contract,
+                passed=False,
+                rejection_reason=RejectionReason.UNACCEPTABLE_GREEKS,
+                rejection_message=f"Contract Greeks profile unacceptable: {'; '.join(greeks_warnings)}",
+            )
+
         # All filters passed
         return FilteredContract(
             contract=contract,
@@ -334,23 +513,22 @@ class OptionsChainFilter:
             contract: The OptionContract to check.
         
         Returns:
-            Dict with 'passed' bool and 'message' str.
+            Dict with 'passed' bool and 'message' str
         """
         if contract.bid is None or contract.ask is None or contract.bid <= 0:
-            return {"passed": False, "message": "Cannot calculate spread: missing or invalid bid/ask."}
-
-        mid = (contract.bid + contract.ask) / 2.0
-        if mid <= 0:
-            return {"passed": False, "message": "Cannot calculate spread: invalid midpoint."}
-
-        spread_pct = (contract.ask - contract.bid) / mid
-        if spread_pct > self.config.max_bid_ask_spread_pct:
+            return {"passed": False, "message": "Invalid bid/ask prices"}
+        
+        spread = contract.ask - contract.bid
+        spread_pct = (spread / contract.bid) * 100 if contract.bid > 0 else 100
+        
+        max_spread_pct = self.config.max_bid_ask_spread_pct
+        if spread_pct > max_spread_pct:
             return {
                 "passed": False,
-                "message": f"Bid-ask spread ({spread_pct:.2%}) exceeds maximum ({self.config.max_bid_ask_spread_pct:.2%}) for {self.risk_level.value} risk level.",
+                "message": f"Bid-ask spread {spread_pct:.2f}% exceeds maximum {max_spread_pct:.2f}% for {self.risk_level.value} risk level.",
             }
-
-        return {"passed": True, "message": "Bid-ask spread is acceptable."}
+        
+        return {"passed": True, "message": "Bid-ask spread acceptable"}
 
     def _is_in_expiration_window(self, contract: OptionContract) -> bool:
         """Check if contract expiration is within acceptable window.
@@ -359,126 +537,11 @@ class OptionsChainFilter:
             contract: The OptionContract to check.
         
         Returns:
-            True if expiration is within window, False otherwise.
+            True if expiration is in window, False otherwise.
         """
         if contract.days_to_expiration is None:
             return False
+        
         return (
-            self.config.min_days_to_expiration
-            <= contract.days_to_expiration
-            <= self.config.max_days_to_expiration
+            self.config.min_days_to_expiration <= contract.days_to_expiration <= self.config.max_days_to_expiration
         )
-
-    def calculate_liquidity_score(self, contract: OptionContract) -> float:
-        """Calculate liquidity score for a contract (0-100).
-        
-        Liquidity score is based on:
-        - Bid/ask spread percentage (lower is better)
-        - Volume (higher is better)
-        - Open interest (higher is better)
-        - Days to expiration (moderate is better)
-        
-        Args:
-            contract: The OptionContract to score.
-        
-        Returns:
-            Liquidity score from 0 to 100.
-        """
-        if not self._has_bid_ask(contract):
-            return 0.0
-
-        scores = []
-
-        # Spread score (0-25 points): lower spread is better
-        mid = (contract.bid + contract.ask) / 2.0
-        if mid > 0:
-            spread_pct = (contract.ask - contract.bid) / mid
-            # 0% spread = 25 points, 5% spread = 0 points
-            spread_score = max(0, 25 * (1 - spread_pct / 0.05))
-            scores.append(spread_score)
-        else:
-            scores.append(0.0)
-
-        # Volume score (0-25 points): higher volume is better
-        if contract.volume is not None:
-            # 1000+ volume = 25 points, 0 volume = 0 points
-            volume_score = min(25, (contract.volume / 1000.0) * 25)
-            scores.append(volume_score)
-        else:
-            scores.append(0.0)
-
-        # Open interest score (0-25 points): higher OI is better
-        if contract.open_interest is not None:
-            # 2000+ OI = 25 points, 0 OI = 0 points
-            oi_score = min(25, (contract.open_interest / 2000.0) * 25)
-            scores.append(oi_score)
-        else:
-            scores.append(0.0)
-
-        # Days to expiration score (0-25 points): 15-45 days is optimal
-        if contract.days_to_expiration is not None:
-            dte = contract.days_to_expiration
-            if 15 <= dte <= 45:
-                # Optimal range: 25 points
-                dte_score = 25.0
-            elif dte < 15:
-                # Too close to expiration: penalize
-                dte_score = max(0, 25 * (dte / 15.0))
-            else:
-                # Too far out: penalize
-                dte_score = max(0, 25 * (1 - (dte - 45) / 100.0))
-            scores.append(dte_score)
-        else:
-            scores.append(0.0)
-
-        # Return average of all scores
-        return sum(scores) / len(scores) if scores else 0.0
-
-
-class RiskEngine:
-    """Engine for validating trades against global risk guardrails."""
-
-    def __init__(self, risk_level: RiskLevel = RiskLevel.MEDIUM):
-        """Initialize the risk engine with a risk level.
-        
-        Args:
-            risk_level: The RiskLevel to use for guardrail validation.
-        """
-        self.risk_level = risk_level
-        self.config = get_risk_config(risk_level)
-
-    def validate_trade(
-        self,
-        contract: OptionContract,
-        max_loss_pct: float,
-        num_contracts: int = 1,
-        current_daily_loss_pct: float = 0.0,
-        current_open_positions: int = 0,
-        is_paper_trading: bool = True,
-    ) -> Tuple[bool, str]:
-        """Validate a trade against risk guardrails.
-        
-        Args:
-            contract: The OptionContract to validate
-            max_loss_pct: Maximum loss as percentage of portfolio
-            num_contracts: Number of contracts to trade
-            current_daily_loss_pct: Current daily loss percentage
-            current_open_positions: Current number of open positions
-            is_paper_trading: Whether this is paper trading
-            
-        Returns:
-            Tuple of (is_valid, message)
-        """
-        # Check max loss per trade
-        if max_loss_pct > self.config.max_loss_pct_per_trade:
-            return False, f"Max loss {max_loss_pct:.2%} exceeds limit {self.config.max_loss_pct_per_trade:.2%}"
-        
-        # Check daily loss limit
-        if current_daily_loss_pct + max_loss_pct > self.config.max_daily_loss_pct:
-            return False, f"Daily loss would exceed limit"
-        
-        # Check max open positions
-        if current_open_positions >= self.config.max_open_positions:
-            return False, f"Max open positions {self.config.max_open_positions} reached"
-        
-        return True, "Trade passed all risk checks"

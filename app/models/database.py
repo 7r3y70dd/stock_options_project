@@ -108,10 +108,10 @@ class OptionContract(Base):
     volume = Column(Integer, nullable=False)
     open_interest = Column(Integer, nullable=False)
     implied_volatility = Column(Float, nullable=False)
-    delta = Column(Float, nullable=True)  # Greek: delta
-    gamma = Column(Float, nullable=True)  # Greek: gamma
-    theta = Column(Float, nullable=True)  # Greek: theta
-    vega = Column(Float, nullable=True)  # Greek: vega
+    delta = Column(Float, nullable=True)  # Greek: delta (directional exposure)
+    gamma = Column(Float, nullable=True)  # Greek: gamma (acceleration risk)
+    theta = Column(Float, nullable=True)  # Greek: theta (time decay)
+    vega = Column(Float, nullable=True)  # Greek: vega (volatility sensitivity)
     underlying_price = Column(Float, nullable=False)
     days_to_expiration = Column(Integer, nullable=False)
     earnings_date = Column(String(10), nullable=True)  # YYYY-MM-DD
@@ -155,7 +155,7 @@ class Signal(Base):
     """Trading signal model for storing generated trade ideas.
     
     Stores trading signals with comprehensive analysis including risk assessment,
-    profit/loss estimates, strategy information, and volatility context.
+    profit/loss estimates, strategy information, volatility context, and Greeks analysis.
     Every signal includes an explanation (reason) and max-loss estimate as required.
     """
 
@@ -173,6 +173,7 @@ class Signal(Base):
     reason = Column(Text, nullable=False)  # Explanation of the signal (required)
     status = Column(String(50), default="pending", nullable=False, index=True)  # pending, approved, rejected, expired, executed
     option_contract_id = Column(Integer, ForeignKey("option_contracts.id"), nullable=True, index=True)  # Optional: linked contract
+    breakdown = Column(Text, nullable=True)  # JSON string of factor scores and Greeks summary
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
