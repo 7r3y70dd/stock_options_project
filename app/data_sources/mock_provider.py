@@ -6,7 +6,7 @@ Provides realistic but synthetic market data without requiring API keys or netwo
 import logging
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
-import random
+from random import Random
 
 from app.data_sources.data_provider import (
     DataProvider,
@@ -60,8 +60,7 @@ class MockDataProvider(DataProvider):
         Args:
             seed: Optional random seed for reproducible data
         """
-        if seed is not None:
-            random.seed(seed)
+        self._rng = Random(seed)
         logger.info("MockDataProvider initialized")
 
     def get_quote(self, symbol: str) -> Optional[Quote]:
@@ -79,7 +78,7 @@ class MockDataProvider(DataProvider):
             return None
 
         # Add some random variation
-        variation = base_price * random.uniform(-0.02, 0.02)
+        variation = base_price * self._rng.uniform(-0.02, 0.02)
         price = base_price + variation
         bid = price - 0.01
         ask = price + 0.01
@@ -89,7 +88,7 @@ class MockDataProvider(DataProvider):
             price=round(price, 2),
             bid=round(bid, 2),
             ask=round(ask, 2),
-            volume=random.randint(1000000, 50000000),
+            volume=self._rng.randint(1000000, 50000000),
             timestamp=datetime.utcnow(),
         )
 
@@ -134,11 +133,11 @@ class MockDataProvider(DataProvider):
                 continue
 
             # Generate realistic OHLCV data
-            daily_change = random.uniform(-0.03, 0.03)
+            daily_change = self._rng.uniform(-0.03, 0.03)
             open_price = current_price
             close_price = current_price * (1 + daily_change)
-            high_price = max(open_price, close_price) * random.uniform(1.0, 1.02)
-            low_price = min(open_price, close_price) * random.uniform(0.98, 1.0)
+            high_price = max(open_price, close_price) * self._rng.uniform(1.0, 1.02)
+            low_price = min(open_price, close_price) * self._rng.uniform(0.98, 1.0)
 
             bar = PriceBar(
                 date=current_date.isoformat(),
@@ -146,7 +145,7 @@ class MockDataProvider(DataProvider):
                 high=round(high_price, 2),
                 low=round(low_price, 2),
                 close=round(close_price, 2),
-                volume=random.randint(1000000, 50000000),
+                volume=self._rng.randint(1000000, 50000000),
                 adjusted_close=round(close_price, 2),
             )
             bars.append(bar)
@@ -225,14 +224,14 @@ class MockDataProvider(DataProvider):
                         bid=round(bid, 2),
                         ask=round(ask, 2),
                         last=round(mid_price, 2),
-                        volume=random.randint(10, 10000),
-                        open_interest=random.randint(100, 100000),
-                        implied_volatility=round(random.uniform(0.15, 0.50), 2),
-                        delta=round(random.uniform(-1.0, 1.0), 2),
-                        gamma=round(random.uniform(0.0, 0.1), 3),
-                        theta=round(random.uniform(-0.1, 0.0), 3),
-                        vega=round(random.uniform(0.0, 0.5), 2),
-                        rho=round(random.uniform(-0.1, 0.1), 2),
+                        volume=self._rng.randint(10, 10000),
+                        open_interest=self._rng.randint(100, 100000),
+                        implied_volatility=round(self._rng.uniform(0.15, 0.50), 2),
+                        delta=round(self._rng.uniform(-1.0, 1.0), 2),
+                        gamma=round(self._rng.uniform(0.0, 0.1), 3),
+                        theta=round(self._rng.uniform(-0.1, 0.0), 3),
+                        vega=round(self._rng.uniform(0.0, 0.5), 2),
+                        rho=round(self._rng.uniform(-0.1, 0.1), 2),
                     )
                     chain.append(entry)
 
@@ -264,7 +263,7 @@ class MockDataProvider(DataProvider):
                 url=f"https://example.com/news/{i}",
                 source="Mock News",
                 published_at=datetime.utcnow() - timedelta(hours=i),
-                sentiment=random.choice(["positive", "negative", "neutral"]),
+                sentiment=self._rng.choice(["positive", "negative", "neutral"]),
             )
             articles.append(article)
 
@@ -289,9 +288,9 @@ class MockDataProvider(DataProvider):
         return EarningsDate(
             symbol=symbol_upper,
             date=earnings_date,
-            time=random.choice(["before_open", "after_close"]),
-            eps_estimate=round(random.uniform(1.0, 5.0), 2),
+            time=self._rng.choice(["before_open", "after_close"]),
+            eps_estimate=round(self._rng.uniform(1.0, 5.0), 2),
             eps_actual=None,
-            revenue_estimate=round(random.uniform(50000, 500000), 0),
+            revenue_estimate=round(self._rng.uniform(50000, 500000), 0),
             revenue_actual=None,
         )
