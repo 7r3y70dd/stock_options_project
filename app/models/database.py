@@ -90,7 +90,8 @@ class OptionContract(Base):
     """Option contract model for storing normalized option chain data.
     
     Stores option contract data including Greeks (delta, gamma, theta, vega),
-    market data (bid, ask, volume, open_interest), and contract specifications.
+    market data (bid, ask, volume, open_interest), and volatility metrics
+    (implied volatility, historical volatility, and volatility context).
     """
 
     __tablename__ = "option_contracts"
@@ -114,6 +115,8 @@ class OptionContract(Base):
     underlying_price = Column(Float, nullable=False)
     days_to_expiration = Column(Integer, nullable=False)
     earnings_date = Column(String(10), nullable=True)  # YYYY-MM-DD
+    historical_volatility = Column(Float, nullable=True)  # Historical volatility calculated from price data
+    volatility_context = Column(String(50), nullable=True)  # "expensive", "cheap", "fair", or None
     last_updated = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
     # Relationships
@@ -152,8 +155,8 @@ class Signal(Base):
     """Trading signal model for storing generated trade ideas.
     
     Stores trading signals with comprehensive analysis including risk assessment,
-    profit/loss estimates, and strategy information. Every signal includes an
-    explanation (reason) and max-loss estimate as required.
+    profit/loss estimates, strategy information, and volatility context.
+    Every signal includes an explanation (reason) and max-loss estimate as required.
     """
 
     __tablename__ = "signals"
