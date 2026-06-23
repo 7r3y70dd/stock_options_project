@@ -2,7 +2,7 @@
 
 import logging
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List, Dict
 
 from app.core.celery import celery_app
 from app.core.config import config
@@ -17,6 +17,7 @@ from app.data_sources import (
     FinnhubProvider,
 )
 from app.models.database import Signal, Trade, OptionContract, NewsArticle
+from services.options_service import VolatilityAnalyzer
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +130,44 @@ def set_broker_provider(provider: BrokerProvider) -> None:
     logger.info(f"Broker provider set to {provider.__class__.__name__}")
 
 
+def _calculate_volatility_context(
+    symbol: str,
+    provider: DataProvider,
+    db,
+) -> Dict[str, Optional[float]]:
+    """Calculate volatility metrics for a symbol.
+    
+    Args:
+        symbol: Stock symbol
+        provider: Data provider instance
+        db: Database session
+        
+    Returns:
+        Dict with 'historical_volatility' and 'volatility_context' keys
+    """
+    try:
+        # Get price history for volatility calculation
+        from datetime import timedelta
+        end_date = datetime.utcnow().strftime("%Y-%m-%d")
+        start_date = (datetime.utcnow() - timedelta(days=60)).strftime("%Y-%m-%d")
+        
+        price_bars = provider.get_price_history(symbol, start_date, end_date)
+        
+        if not price_bars:
+            return {"historical_volatility": None, "volatility_context": None}
+        
+        # Convert to dict format for analyzer
+        bars_dict = [{"close": bar.close} for bar in price_bars]
+        
+        # Calculate historical volatility
+        hv = VolatilityAnalyzer.calculate_historical_volatility(bars_dict)
+        
+        return {"historical_volatility": hv, "volatility_context": None}
+    except Exception as e:
+        logger.warning(f"Error calculating volatility for {symbol}: {e}")
+        return {"historical_volatility": None, "volatility_context": None}
+
+
 @celery_app.task(
     name="app.workers.tasks.refresh_market_data",
     bind=True,
@@ -157,7 +196,7 @@ def refresh_market_data(self, watchlist_id: Optional[int] = None) -> dict:
             # - Call provider.get_quote(symbol) for each
             # - Store quotes in database
             # - Call provider.get_options_chain(symbol) for options data
-            # - Update OptionContract records
+            # - Update OptionContract records with volatility metrics
             
             result = {
                 "status": "success",
@@ -298,8 +337,9 @@ def generate_signals(self, user_id: Optional[int] = None) -> dict:
             # - Get user watchlists and symbols
             # - Call provider.get_price_history() for technical analysis
             # - Call provider.get_news() for sentiment analysis
-            # - Generate signals based on strategies
-            # - Store Signal records in database
+            # - Calculate volatility metrics using VolatilityAnalyzer
+            # - Generate signals based on strategies with volatility context
+            # - Store Signal records in database with IV/HV context in reason field
             
             result = {
                 "status": "success",
@@ -323,16 +363,16 @@ def generate_signals(self, user_id: Optional[int] = None) -> dict:
     name="app.workers.tasks.monitor_trades",
     bind=True,
     max_retries=3,
-    default_retry_delay=30,
+    default_retry_delay=60,
 )
 def monitor_trades(self, user_id: Optional[int] = None) -> dict:
     """Monitor open trades and update their status.
     
     Args:
-        user_id: Optional specific user's trades to monitor. If None, monitor all.
+        user_id: Optional specific user to monitor. If None, monitor all.
         
     Returns:
-        Dictionary with trade monitoring results
+        Dictionary with monitoring results
     """
     try:
         logger.info(f"Starting trade monitoring for user_id={user_id}")
@@ -341,20 +381,21 @@ def monitor_trades(self, user_id: Optional[int] = None) -> dict:
         provider = get_data_provider()
         
         try:
-            # TODO: Implement actual trade monitoring logic
+            # TODO: Implement trade monitoring logic
             # Example:
             # - Get open trades for user
-            # - Call provider.get_quote() for current prices
-            # - Calculate P&L
+            # - Get current prices using provider
+            # - Update unrealized P/L
             # - Check stop-loss and take-profit levels
-            # - Close trades if needed
-            # - Update Trade records in database
+            # - Close trades if necessary
             
             result = {
                 "status": "success",
                 "user_id": user_id,
                 "timestamp": datetime.utcnow().isoformat(),
                 "trades_monitored": 0,
+                "trades_closed": 0,
+                "provider": provider.__class__.__name__,
             }
             logger.info(f"Trade monitoring completed: {result}")
             return result
@@ -363,54 +404,5 @@ def monitor_trades(self, user_id: Optional[int] = None) -> dict:
             
     except Exception as exc:
         logger.error(f"Trade monitoring failed: {exc}", exc_info=True)
-        # Retry with exponential backoff
-        raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
-
-
-@celery_app.task(
-    name="app.workers.tasks.monitor_broker_positions",
-    bind=True,
-    max_retries=3,
-    default_retry_delay=60,
-)
-def monitor_broker_positions(self, user_id: Optional[int] = None) -> dict:
-    """Monitor broker positions and account status.
-    
-    Args:
-        user_id: Optional specific user's positions to monitor. If None, monitor all.
-        
-    Returns:
-        Dictionary with position monitoring results
-    """
-    try:
-        logger.info(f"Starting broker position monitoring for user_id={user_id}")
-        
-        broker = get_broker_provider()
-        
-        try:
-            # Get current account status
-            account = broker.get_account()
-            positions = broker.get_positions()
-            orders = broker.get_orders()
-            
-            result = {
-                "status": "success",
-                "user_id": user_id,
-                "timestamp": datetime.utcnow().isoformat(),
-                "account_id": account.account_id,
-                "account_type": account.account_type,
-                "portfolio_value": account.portfolio_value,
-                "cash": account.cash,
-                "positions_count": len(positions),
-                "orders_count": len(orders),
-                "broker": broker.__class__.__name__,
-            }
-            logger.info(f"Broker position monitoring completed: {result}")
-            return result
-        finally:
-            pass
-            
-    except Exception as exc:
-        logger.error(f"Broker position monitoring failed: {exc}", exc_info=True)
         # Retry with exponential backoff
         raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))

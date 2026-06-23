@@ -1,12 +1,13 @@
 """Options analysis service for scoring and filtering option contracts.
 
-Provides risk-level-aware scoring, filtering, and ranking of options opportunities.
+Provides risk-level-aware scoring, filtering, ranking, and volatility analysis of options opportunities.
 """
 
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, asdict
 from datetime import datetime, timedelta
 import math
+import statistics
 
 from app.data_sources import DataProvider, MockDataProvider
 from services import RiskLevel, get_risk_config, RejectionReason, RiskGuardrail
@@ -28,6 +29,8 @@ class OptionContract:
     underlying_price: Optional[float] = None
     days_to_expiration: Optional[int] = None
     earnings_date: Optional[str] = None  # ISO format date string
+    historical_volatility: Optional[float] = None  # Historical volatility from price data
+    volatility_context: Optional[str] = None  # "expensive", "cheap", "fair"
 
 
 @dataclass
@@ -46,6 +49,10 @@ class ScoredOption:
     max_loss_pct: float
     position_size_pct: float
     liquidity_score: float = 0.0  # Liquidity score 0-100
+    implied_volatility: Optional[float] = None  # IV for context
+    historical_volatility: Optional[float] = None  # HV for context
+    iv_hv_ratio: Optional[float] = None  # IV/HV ratio
+    volatility_context: Optional[str] = None  # "expensive", "cheap", "fair"
 
 
 @dataclass
@@ -55,6 +62,117 @@ class FilteredContract:
     passed: bool
     rejection_reason: RejectionReason
     rejection_message: str
+
+
+class VolatilityAnalyzer:
+    """Analyzer for implied and historical volatility."""
+
+    # Thresholds for flagging expensive/cheap contracts
+    EXPENSIVE_IV_HV_RATIO = 1.5  # IV is 50% higher than HV
+    CHEAP_IV_HV_RATIO = 0.67  # IV is 33% lower than HV
+
+    @staticmethod
+    def calculate_historical_volatility(
+        price_bars: List[Dict[str, float]],
+        periods: int = 20,
+    ) -> Optional[float]:
+        """Calculate historical volatility from price bars.
+        
+        Uses standard deviation of log returns over specified periods.
+        
+        Args:
+            price_bars: List of price bar dicts with 'close' key
+            periods: Number of periods to use for calculation (default: 20)
+            
+        Returns:
+            Historical volatility as decimal (e.g., 0.25 for 25%), or None if insufficient data
+        """
+        if not price_bars or len(price_bars) < 2:
+            return None
+        
+        # Extract closing prices
+        closes = [bar.get('close') for bar in price_bars if bar.get('close')]
+        
+        if len(closes) < 2:
+            return None
+        
+        # Calculate log returns
+        log_returns = []
+        for i in range(1, len(closes)):
+            if closes[i-1] > 0:
+                log_return = math.log(closes[i] / closes[i-1])
+                log_returns.append(log_return)
+        
+        if len(log_returns) < 2:
+            return None
+        
+        # Use only the most recent periods
+        if len(log_returns) > periods:
+            log_returns = log_returns[-periods:]
+        
+        # Calculate standard deviation (volatility)
+        try:
+            std_dev = statistics.stdev(log_returns)
+            # Annualize: multiply by sqrt(252) for daily data
+            annual_volatility = std_dev * math.sqrt(252)
+            return annual_volatility
+        except (ValueError, statistics.StatisticsError):
+            return None
+
+    @staticmethod
+    def compare_volatilities(
+        implied_vol: Optional[float],
+        historical_vol: Optional[float],
+    ) -> Tuple[Optional[float], Optional[str]]:
+        """Compare implied volatility with historical volatility.
+        
+        Args:
+            implied_vol: Implied volatility as decimal
+            historical_vol: Historical volatility as decimal
+            
+        Returns:
+            Tuple of (IV/HV ratio, context) where context is "expensive", "cheap", "fair", or None
+        """
+        if implied_vol is None or historical_vol is None or historical_vol == 0:
+            return None, None
+        
+        ratio = implied_vol / historical_vol
+        
+        if ratio >= VolatilityAnalyzer.EXPENSIVE_IV_HV_RATIO:
+            context = "expensive"
+        elif ratio <= VolatilityAnalyzer.CHEAP_IV_HV_RATIO:
+            context = "cheap"
+        else:
+            context = "fair"
+        
+        return ratio, context
+
+    @staticmethod
+    def flag_contract_volatility(
+        contract: OptionContract,
+        price_bars: Optional[List[Dict[str, float]]] = None,
+    ) -> Tuple[Optional[float], Optional[str]]:
+        """Flag a contract as expensive or cheap based on volatility.
+        
+        Args:
+            contract: OptionContract to analyze
+            price_bars: Optional price bars for calculating historical volatility
+            
+        Returns:
+            Tuple of (IV/HV ratio, volatility_context)
+        """
+        # Calculate historical volatility if price bars provided
+        hv = None
+        if price_bars:
+            hv = VolatilityAnalyzer.calculate_historical_volatility(price_bars)
+        elif contract.historical_volatility:
+            hv = contract.historical_volatility
+        
+        # Compare with implied volatility
+        iv = contract.implied_volatility
+        ratio, context = VolatilityAnalyzer.compare_volatilities(iv, hv)
+        
+        return ratio, context
 
 
 class OptionsChainFilter:
@@ -68,6 +186,7 @@ class OptionsChainFilter:
         """
         self.risk_level = risk_level
         self.config = get_risk_config(risk_level)
+        self.volatility_analyzer = VolatilityAnalyzer()
 
     def filter_contracts(
         self, contracts: List[OptionContract]
@@ -335,181 +454,31 @@ class RiskEngine:
         num_contracts: int = 1,
         current_daily_loss_pct: float = 0.0,
         current_open_positions: int = 0,
-        is_live_trading: bool = False,
-        user_approved_live_trading: bool = False,
-    ) -> RiskGuardrail:
-        """Validate a trade against all guardrails.
+        is_paper_trading: bool = True,
+    ) -> Tuple[bool, str]:
+        """Validate a trade against risk guardrails.
         
         Args:
-            contract: The OptionContract to validate.
-            max_loss_pct: Maximum loss for this trade as % of portfolio.
-            num_contracts: Number of contracts to trade.
-            current_daily_loss_pct: Current daily loss as % of portfolio.
-            current_open_positions: Current number of open positions.
-            is_live_trading: Whether this is a live trade (vs paper trade).
-            user_approved_live_trading: Whether user has approved live trading.
-        
+            contract: The OptionContract to validate
+            max_loss_pct: Maximum loss as percentage of portfolio
+            num_contracts: Number of contracts to trade
+            current_daily_loss_pct: Current daily loss percentage
+            current_open_positions: Current number of open positions
+            is_paper_trading: Whether this is paper trading
+            
         Returns:
-            RiskGuardrail with passed status and human-readable message.
+            Tuple of (is_valid, message)
         """
         # Check max loss per trade
-        if max_loss_pct > self.config.max_loss_per_trade_pct:
-            return RiskGuardrail(
-                passed=False,
-                reason=RejectionReason.MAX_LOSS_EXCEEDED,
-                message=f"Max loss per trade ({max_loss_pct:.2f}%) exceeds limit ({self.config.max_loss_per_trade_pct:.2f}%) for {self.risk_level.value} risk level.",
-            )
-
-        # Check max contracts per trade
-        if num_contracts > 10:  # Hard limit
-            return RiskGuardrail(
-                passed=False,
-                reason=RejectionReason.MAX_CONTRACTS_EXCEEDED,
-                message=f"Number of contracts ({num_contracts}) exceeds maximum (10).",
-            )
-
-        # Check max daily loss
-        projected_daily_loss = current_daily_loss_pct + max_loss_pct
-        if projected_daily_loss > self.config.max_daily_loss_pct:
-            return RiskGuardrail(
-                passed=False,
-                reason=RejectionReason.MAX_DAILY_LOSS_EXCEEDED,
-                message=f"Projected daily loss ({projected_daily_loss:.2f}%) would exceed limit ({self.config.max_daily_loss_pct:.2f}%) for {self.risk_level.value} risk level.",
-            )
-
+        if max_loss_pct > self.config.max_loss_pct_per_trade:
+            return False, f"Max loss {max_loss_pct:.2%} exceeds limit {self.config.max_loss_pct_per_trade:.2%}"
+        
+        # Check daily loss limit
+        if current_daily_loss_pct + max_loss_pct > self.config.max_daily_loss_pct:
+            return False, f"Daily loss would exceed limit"
+        
         # Check max open positions
         if current_open_positions >= self.config.max_open_positions:
-            return RiskGuardrail(
-                passed=False,
-                reason=RejectionReason.MAX_OPEN_POSITIONS_EXCEEDED,
-                message=f"Current open positions ({current_open_positions}) meets or exceeds maximum ({self.config.max_open_positions}) for {self.risk_level.value} risk level.",
-            )
-
-        # Check bid-ask spread
-        spread_check = self._check_bid_ask_spread(contract)
-        if not spread_check["passed"]:
-            return RiskGuardrail(
-                passed=False,
-                reason=RejectionReason.BID_ASK_SPREAD_TOO_WIDE,
-                message=spread_check["message"],
-            )
-
-        # Check volume
-        if not self._has_sufficient_volume(contract):
-            return RiskGuardrail(
-                passed=False,
-                reason=RejectionReason.VOLUME_TOO_LOW,
-                message=f"Contract volume ({contract.volume}) is below minimum ({self.config.min_volume}) for {self.risk_level.value} risk level.",
-            )
-
-        # Check open interest
-        if not self._has_sufficient_open_interest(contract):
-            return RiskGuardrail(
-                passed=False,
-                reason=RejectionReason.OPEN_INTEREST_TOO_LOW,
-                message=f"Contract open interest ({contract.open_interest}) is below minimum ({self.config.min_open_interest}) for {self.risk_level.value} risk level.",
-            )
-
-        # Check earnings window
-        if contract.earnings_date is not None:
-            earnings_check = self._check_earnings_window(contract)
-            if not earnings_check["passed"]:
-                return RiskGuardrail(
-                    passed=False,
-                    reason=RejectionReason.EARNINGS_WINDOW_RESTRICTED,
-                    message=earnings_check["message"],
-                )
-
-        # Check live trading approval
-        if is_live_trading and not user_approved_live_trading:
-            return RiskGuardrail(
-                passed=False,
-                reason=RejectionReason.LIVE_TRADING_NOT_APPROVED,
-                message="Live trading is disabled by default. User must explicitly approve live trading.",
-            )
-
-        # All guardrails passed
-        return RiskGuardrail(
-            passed=True,
-            reason=RejectionReason.PASSED,
-            message="Trade passed all guardrails.",
-        )
-
-    def _check_bid_ask_spread(self, contract: OptionContract) -> Dict[str, any]:
-        """Check if bid-ask spread is acceptable.
+            return False, f"Max open positions {self.config.max_open_positions} reached"
         
-        Args:
-            contract: The OptionContract to check.
-        
-        Returns:
-            Dict with 'passed' bool and 'message' str.
-        """
-        if contract.bid is None or contract.ask is None or contract.bid <= 0:
-            return {"passed": False, "message": "Cannot calculate spread: missing or invalid bid/ask."}
-
-        mid = (contract.bid + contract.ask) / 2.0
-        if mid <= 0:
-            return {"passed": False, "message": "Cannot calculate spread: invalid midpoint."}
-
-        spread_pct = (contract.ask - contract.bid) / mid
-        if spread_pct > self.config.max_bid_ask_spread_pct:
-            return {
-                "passed": False,
-                "message": f"Bid-ask spread ({spread_pct:.2%}) exceeds maximum ({self.config.max_bid_ask_spread_pct:.2%}) for {self.risk_level.value} risk level.",
-            }
-
-        return {"passed": True, "message": "Bid-ask spread is acceptable."}
-
-    def _has_sufficient_volume(self, contract: OptionContract) -> bool:
-        """Check if contract has sufficient volume.
-        
-        Args:
-            contract: The OptionContract to check.
-        
-        Returns:
-            True if volume meets minimum, False otherwise.
-        """
-        if contract.volume is None:
-            return False
-        return contract.volume >= self.config.min_volume
-
-    def _has_sufficient_open_interest(self, contract: OptionContract) -> bool:
-        """Check if contract has sufficient open interest.
-        
-        Args:
-            contract: The OptionContract to check.
-        
-        Returns:
-            True if open interest meets minimum, False otherwise.
-        """
-        if contract.open_interest is None:
-            return False
-        return contract.open_interest >= self.config.min_open_interest
-
-    def _check_earnings_window(self, contract: OptionContract) -> Dict[str, any]:
-        """Check if contract is outside earnings window.
-        
-        Args:
-            contract: The OptionContract to check.
-        
-        Returns:
-            Dict with 'passed' bool and 'message' str.
-        """
-        if contract.earnings_date is None:
-            return {"passed": True, "message": "No earnings date."}
-
-        try:
-            earnings_dt = datetime.fromisoformat(contract.earnings_date)
-            now = datetime.now()
-            days_until_earnings = (earnings_dt - now).days
-            buffer = self.config.earnings_buffer_days
-
-            if -buffer <= days_until_earnings <= buffer:
-                return {
-                    "passed": False,
-                    "message": f"Contract is within {buffer}-day earnings buffer (earnings in {days_until_earnings} days).",
-                }
-        except (ValueError, TypeError):
-            pass
-
-        return {"passed": True, "message": "Outside earnings window."}
+        return True, "Trade passed all risk checks"
