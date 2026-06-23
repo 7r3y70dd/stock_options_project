@@ -337,30 +337,183 @@ class GreeksAnalyzer:
         
         return acceptable, warnings, scores
 
+    @staticmethod
+    def calculate_greeks_score(
+        contract: OptionContract,
+        risk_level: RiskLevel = RiskLevel.MEDIUM,
+    ) -> float:
+        """Calculate overall Greeks score for a contract.
+        
+        Args:
+            contract: OptionContract to score
+            risk_level: Risk level for threshold comparison
+            
+        Returns:
+            Greeks score from 0.0 to 1.0
+        """
+        acceptable, warnings, scores = GreeksAnalyzer.assess_greek_profile(contract, risk_level)
+        
+        if not scores:
+            # No Greeks data available
+            return 1.0
+        
+        # Average the individual scores
+        avg_score = sum(scores.values()) / len(scores)
+        
+        # Penalize for warnings
+        penalty = len(warnings) * 0.1
+        final_score = max(avg_score - penalty, 0.0)
+        
+        return min(final_score, 1.0)
+
+
+class PricingAnalyzer:
+    """Analyzer for option pricing using Black-Scholes model."""
+
+    def __init__(self, risk_free_rate: float = 0.05, dividend_yield: float = 0.0):
+        """Initialize pricing analyzer.
+        
+        Args:
+            risk_free_rate: Risk-free interest rate (default: 5%)
+            dividend_yield: Dividend yield (default: 0%)
+        """
+        self.risk_free_rate = risk_free_rate
+        self.dividend_yield = dividend_yield
+        self.pricing_engine = None
+        
+        if QUANTLIB_AVAILABLE:
+            try:
+                self.pricing_engine = QuantLibPricingEngine(
+                    risk_free_rate=risk_free_rate,
+                    dividend_yield=dividend_yield,
+                )
+            except Exception:
+                pass
+
+    def calculate_theoretical_price(self, contract: OptionContract) -> Optional[float]:
+        """Calculate theoretical price for a contract.
+        
+        Args:
+            contract: OptionContract to price
+            
+        Returns:
+            Theoretical price or None if pricing engine unavailable or data missing
+        """
+        if self.pricing_engine is None:
+            return None
+        
+        if contract.implied_volatility is None or contract.underlying_price is None:
+            return None
+        
+        try:
+            price = self.pricing_engine.price(
+                underlying_price=contract.underlying_price,
+                strike=contract.strike,
+                time_to_expiration=contract.days_to_expiration / 365.0 if contract.days_to_expiration else 0.1,
+                volatility=contract.implied_volatility,
+                option_type="call" if contract.contract_type.lower() == "call" else "put",
+            )
+            return price
+        except Exception:
+            return None
+
+    def compare_prices(self, contract: OptionContract) -> Tuple[Optional[float], Optional[float], Optional[str]]:
+        """Compare market price with theoretical price.
+        
+        Args:
+            contract: OptionContract to compare
+            
+        Returns:
+            Tuple of (theoretical_price, difference, assessment)
+            where assessment is "overpriced", "underpriced", or "fair"
+        """
+        if contract.bid is None or contract.ask is None:
+            return None, None, None
+        
+        theoretical_price = self.calculate_theoretical_price(contract)
+        if theoretical_price is None:
+            return None, None, None
+        
+        market_mid_price = (contract.bid + contract.ask) / 2
+        difference = market_mid_price - theoretical_price
+        
+        # Determine if overpriced or underpriced
+        threshold = theoretical_price * 0.05  # 5% threshold
+        if difference > threshold:
+            assessment = "overpriced"
+        elif difference < -threshold:
+            assessment = "underpriced"
+        else:
+            assessment = "fair"
+        
+        return theoretical_price, difference, assessment
+
 
 class OptionsChainFilter:
-    """Filter option contracts based on quality and risk criteria."""
+    """Filter option contracts based on quality and risk criteria.
+    
+    Filters contracts by:
+    - Expiration (removes expired contracts)
+    - Bid/ask availability
+    - Liquidity (volume and open interest)
+    - Bid-ask spread
+    - Risk level
+    - Expiration window
+    """
 
-    @staticmethod
-    def filter_expired(contract: OptionContract) -> FilteredContract:
-        """Filter out expired contracts."""
-        if contract.days_to_expiration is not None and contract.days_to_expiration <= 0:
-            return FilteredContract(
-                contract=contract,
-                passed=False,
-                rejection_reason=RejectionReason.EXPIRED,
-                rejection_message="Contract has expired",
-            )
-        return FilteredContract(
-            contract=contract,
-            passed=True,
-            rejection_reason=RejectionReason.PASSED,
-            rejection_message="",
-        )
+    def __init__(self, risk_level: RiskLevel = RiskLevel.MEDIUM):
+        """Initialize options chain filter.
+        
+        Args:
+            risk_level: Risk level for filtering thresholds
+        """
+        self.risk_level = risk_level
+        self.risk_config = get_risk_config(risk_level)
 
-    @staticmethod
-    def filter_missing_bid_ask(contract: OptionContract) -> FilteredContract:
-        """Filter out contracts with missing bid/ask."""
+    def filter_chain(
+        self,
+        contracts: List[OptionContract],
+    ) -> List[FilteredContract]:
+        """Filter a chain of option contracts.
+        
+        Args:
+            contracts: List of OptionContract to filter
+            
+        Returns:
+            List of FilteredContract with pass/fail status and rejection reasons
+        """
+        results = []
+        
+        for contract in contracts:
+            result = self._filter_contract(contract)
+            results.append(result)
+        
+        return results
+
+    def _filter_contract(self, contract: OptionContract) -> FilteredContract:
+        """Filter a single contract through all checks.
+        
+        Args:
+            contract: OptionContract to filter
+            
+        Returns:
+            FilteredContract with pass/fail status
+        """
+        # Check expiration
+        if contract.expiration:
+            try:
+                exp_date = datetime.strptime(contract.expiration, "%Y-%m-%d").date()
+                if exp_date < datetime.now().date():
+                    return FilteredContract(
+                        contract=contract,
+                        passed=False,
+                        rejection_reason=RejectionReason.EXPIRED,
+                        rejection_message="Contract has expired",
+                    )
+            except (ValueError, TypeError):
+                pass
+        
+        # Check bid/ask
         if contract.bid is None or contract.ask is None:
             return FilteredContract(
                 contract=contract,
@@ -368,144 +521,74 @@ class OptionsChainFilter:
                 rejection_reason=RejectionReason.MISSING_BID_ASK,
                 rejection_message="Missing bid or ask price",
             )
-        return FilteredContract(
-            contract=contract,
-            passed=True,
-            rejection_reason=RejectionReason.PASSED,
-            rejection_message="",
-        )
-
-    @staticmethod
-    def filter_illiquid(contract: OptionContract, risk_config) -> FilteredContract:
-        """Filter out illiquid contracts (low volume/open_interest)."""
-        volume = contract.volume or 0
-        if volume < risk_config.min_volume:
+        
+        # Check liquidity (volume)
+        min_volume = self.risk_config.get("min_volume", 10)
+        if (contract.volume or 0) < min_volume:
             return FilteredContract(
                 contract=contract,
                 passed=False,
                 rejection_reason=RejectionReason.VOLUME_TOO_LOW,
-                rejection_message=f"Volume {volume} below minimum {risk_config.min_volume}",
+                rejection_message=f"Volume {contract.volume or 0} below minimum {min_volume}",
             )
         
-        open_interest = contract.open_interest or 0
-        if open_interest < risk_config.min_open_interest:
+        # Check liquidity (open interest)
+        min_open_interest = self.risk_config.get("min_open_interest", 20)
+        if (contract.open_interest or 0) < min_open_interest:
             return FilteredContract(
                 contract=contract,
                 passed=False,
                 rejection_reason=RejectionReason.OPEN_INTEREST_TOO_LOW,
-                rejection_message=f"Open interest {open_interest} below minimum {risk_config.min_open_interest}",
+                rejection_message=f"Open interest {contract.open_interest or 0} below minimum {min_open_interest}",
             )
         
-        return FilteredContract(
-            contract=contract,
-            passed=True,
-            rejection_reason=RejectionReason.PASSED,
-            rejection_message="",
-        )
-
-    @staticmethod
-    def filter_spread(contract: OptionContract, risk_config) -> FilteredContract:
-        """Filter out contracts with excessive bid/ask spread."""
-        if contract.bid is None or contract.ask is None or contract.bid == 0:
-            return FilteredContract(
-                contract=contract,
-                passed=True,
-                rejection_reason=RejectionReason.PASSED,
-                rejection_message="",
-            )
+        # Check bid-ask spread
+        max_spread_pct = self.risk_config.get("max_bid_ask_spread_pct", 0.05)
+        mid_price = (contract.bid + contract.ask) / 2
+        if mid_price > 0:
+            spread_pct = (contract.ask - contract.bid) / mid_price
+            if spread_pct > max_spread_pct:
+                return FilteredContract(
+                    contract=contract,
+                    passed=False,
+                    rejection_reason=RejectionReason.BID_ASK_SPREAD_TOO_WIDE,
+                    rejection_message=f"Bid-ask spread {spread_pct:.1%} exceeds maximum {max_spread_pct:.1%}",
+                )
         
-        spread_pct = ((contract.ask - contract.bid) / contract.bid) * 100
-        if spread_pct > risk_config.max_bid_ask_spread_pct:
-            return FilteredContract(
-                contract=contract,
-                passed=False,
-                rejection_reason=RejectionReason.BID_ASK_SPREAD_TOO_WIDE,
-                rejection_message=f"Spread {spread_pct:.2f}% exceeds maximum {risk_config.max_bid_ask_spread_pct}%",
-            )
-        
-        return FilteredContract(
-            contract=contract,
-            passed=True,
-            rejection_reason=RejectionReason.PASSED,
-            rejection_message="",
-        )
-
-    @staticmethod
-    def filter_expiration_window(contract: OptionContract, risk_config) -> FilteredContract:
-        """Filter out contracts outside expiration window."""
-        dte = contract.days_to_expiration
-        if dte is None:
-            return FilteredContract(
-                contract=contract,
-                passed=True,
-                rejection_reason=RejectionReason.PASSED,
-                rejection_message="",
-            )
-        
-        if dte < risk_config.min_days_to_expiration or dte > risk_config.max_days_to_expiration:
+        # Check expiration window
+        min_dte = self.risk_config.get("min_days_to_expiration", 7)
+        max_dte = self.risk_config.get("max_days_to_expiration", 60)
+        dte = contract.days_to_expiration or 30
+        if dte < min_dte or dte > max_dte:
             return FilteredContract(
                 contract=contract,
                 passed=False,
-                rejection_reason=RejectionReason.OUTSIDE_EXPIRATION_WINDOW,
-                rejection_message=f"DTE {dte} outside window [{risk_config.min_days_to_expiration}, {risk_config.max_days_to_expiration}]",
+                rejection_reason=RejectionReason.EXPIRATION_WINDOW_INVALID,
+                rejection_message=f"Days to expiration {dte} outside window [{min_dte}, {max_dte}]",
             )
         
+        # All checks passed
         return FilteredContract(
             contract=contract,
             passed=True,
-            rejection_reason=RejectionReason.PASSED,
+            rejection_reason=RejectionReason.NONE,
             rejection_message="",
         )
-
-    @staticmethod
-    def filter_chain(
-        contracts: List[OptionContract],
-        risk_level: RiskLevel = RiskLevel.MEDIUM,
-    ) -> List[FilteredContract]:
-        """Filter an entire options chain."""
-        risk_config = get_risk_config(risk_level)
-        filtered = []
-        
-        for contract in contracts:
-            # Apply all filters in sequence
-            result = OptionsChainFilter.filter_expired(contract)
-            if not result.passed:
-                filtered.append(result)
-                continue
-            
-            result = OptionsChainFilter.filter_missing_bid_ask(contract)
-            if not result.passed:
-                filtered.append(result)
-                continue
-            
-            result = OptionsChainFilter.filter_illiquid(contract, risk_config)
-            if not result.passed:
-                filtered.append(result)
-                continue
-            
-            result = OptionsChainFilter.filter_spread(contract, risk_config)
-            if not result.passed:
-                filtered.append(result)
-                continue
-            
-            result = OptionsChainFilter.filter_expiration_window(contract, risk_config)
-            if not result.passed:
-                filtered.append(result)
-                continue
-            
-            # Contract passed all filters
-            filtered.append(FilteredContract(
-                contract=contract,
-                passed=True,
-                rejection_reason=RejectionReason.PASSED,
-                rejection_message="",
-            ))
-        
-        return filtered
 
 
 class RiskEngine:
-    """Engine for validating trades against risk guardrails."""
+    """Engine for validating trades against risk guardrails.
+    
+    Validates trades against global risk limits including:
+    - Max loss per trade
+    - Max contracts per trade
+    - Max daily loss
+    - Max open positions
+    - Bid-ask spread limits
+    - Volume and open interest minimums
+    - Earnings window restrictions
+    - Live trading approval
+    """
 
     def __init__(self, risk_level: RiskLevel = RiskLevel.MEDIUM):
         """Initialize risk engine.
@@ -520,7 +603,7 @@ class RiskEngine:
         self,
         contract: OptionContract,
         max_loss_pct: float,
-        num_contracts: int = 1,
+        num_contracts: int,
         current_daily_loss_pct: float = 0.0,
         current_open_positions: int = 0,
         is_live_trading: bool = False,
@@ -530,142 +613,99 @@ class RiskEngine:
         
         Args:
             contract: OptionContract to validate
-            max_loss_pct: Maximum loss percentage for this trade
-            num_contracts: Number of contracts to trade
+            max_loss_pct: Maximum loss as percentage
+            num_contracts: Number of contracts
             current_daily_loss_pct: Current daily loss percentage
             current_open_positions: Current number of open positions
             is_live_trading: Whether this is a live trade
             user_approved_live_trading: Whether user approved live trading
             
         Returns:
-            RiskGuardrailResult with pass/fail and reason
+            RiskGuardrailResult with pass/fail status and reason
         """
         # Check max loss per trade
-        max_loss_limits = {
-            RiskLevel.LOW: 2.0,
-            RiskLevel.MEDIUM: 5.0,
-            RiskLevel.HIGH: 10.0,
-        }
-        max_loss_limit = max_loss_limits.get(self.risk_level, 5.0)
+        max_loss_limit = self.risk_config.get("max_loss_per_trade_pct", 5.0)
         if max_loss_pct > max_loss_limit:
             return RiskGuardrailResult(
                 passed=False,
                 reason=RejectionReason.MAX_LOSS_EXCEEDED,
                 message=f"Max loss {max_loss_pct:.2f}% exceeds limit {max_loss_limit:.2f}%",
             )
-
+        
         # Check max contracts per trade
-        max_contracts_limits = {
-            RiskLevel.LOW: 5,
-            RiskLevel.MEDIUM: 10,
-            RiskLevel.HIGH: 20,
-        }
-        max_contracts_limit = max_contracts_limits.get(self.risk_level, 10)
-        if num_contracts > max_contracts_limit:
+        max_contracts = self.risk_config.get("max_contracts_per_trade", 10)
+        if num_contracts > max_contracts:
             return RiskGuardrailResult(
                 passed=False,
                 reason=RejectionReason.MAX_CONTRACTS_EXCEEDED,
-                message=f"Number of contracts {num_contracts} exceeds limit {max_contracts_limit}",
+                message=f"Number of contracts {num_contracts} exceeds limit {max_contracts}",
             )
-
+        
         # Check max daily loss
-        max_daily_loss_limits = {
-            RiskLevel.LOW: 3.0,
-            RiskLevel.MEDIUM: 7.0,
-            RiskLevel.HIGH: 15.0,
-        }
-        max_daily_loss_limit = max_daily_loss_limits.get(self.risk_level, 7.0)
+        max_daily_loss = self.risk_config.get("max_daily_loss_pct", 3.0)
         total_daily_loss = current_daily_loss_pct + max_loss_pct
-        if total_daily_loss > max_daily_loss_limit:
+        if total_daily_loss > max_daily_loss:
             return RiskGuardrailResult(
                 passed=False,
                 reason=RejectionReason.MAX_DAILY_LOSS_EXCEEDED,
-                message=f"Total daily loss {total_daily_loss:.2f}% exceeds limit {max_daily_loss_limit:.2f}%",
+                message=f"Total daily loss {total_daily_loss:.2f}% exceeds limit {max_daily_loss:.2f}%",
             )
-
+        
         # Check max open positions
-        max_open_positions_limits = {
-            RiskLevel.LOW: 5,
-            RiskLevel.MEDIUM: 10,
-            RiskLevel.HIGH: 20,
-        }
-        max_open_positions_limit = max_open_positions_limits.get(self.risk_level, 10)
-        if current_open_positions >= max_open_positions_limit:
+        max_open_positions = self.risk_config.get("max_open_positions", 5)
+        if current_open_positions >= max_open_positions:
             return RiskGuardrailResult(
                 passed=False,
                 reason=RejectionReason.MAX_OPEN_POSITIONS_EXCEEDED,
-                message=f"Open positions {current_open_positions} at or exceeds limit {max_open_positions_limit}",
+                message=f"Open positions {current_open_positions} at or exceeds limit {max_open_positions}",
             )
-
+        
         # Check bid-ask spread
-        if contract.bid is not None and contract.ask is not None and contract.bid > 0:
-            spread_pct = ((contract.ask - contract.bid) / contract.bid) * 100
-            max_spread_limits = {
-                RiskLevel.LOW: 5.0,
-                RiskLevel.MEDIUM: 10.0,
-                RiskLevel.HIGH: 20.0,
-            }
-            max_spread_limit = max_spread_limits.get(self.risk_level, 10.0)
-            if spread_pct > max_spread_limit:
-                return RiskGuardrailResult(
-                    passed=False,
-                    reason=RejectionReason.BID_ASK_SPREAD_TOO_WIDE,
-                    message=f"Bid-ask spread {spread_pct:.2f}% exceeds limit {max_spread_limit:.2f}%",
-                )
-
+        if contract.bid and contract.ask:
+            max_spread_pct = self.risk_config.get("max_bid_ask_spread_pct", 0.05)
+            mid_price = (contract.bid + contract.ask) / 2
+            if mid_price > 0:
+                spread_pct = (contract.ask - contract.bid) / mid_price
+                if spread_pct > max_spread_pct:
+                    return RiskGuardrailResult(
+                        passed=False,
+                        reason=RejectionReason.BID_ASK_SPREAD_TOO_WIDE,
+                        message=f"Bid-ask spread {spread_pct:.1%} exceeds limit {max_spread_pct:.1%}",
+                    )
+        
         # Check volume
-        volume = contract.volume or 0
-        min_volume_limits = {
-            RiskLevel.LOW: 50,
-            RiskLevel.MEDIUM: 20,
-            RiskLevel.HIGH: 5,
-        }
-        min_volume_limit = min_volume_limits.get(self.risk_level, 20)
-        if volume < min_volume_limit:
+        min_volume = self.risk_config.get("min_volume", 10)
+        if (contract.volume or 0) < min_volume:
             return RiskGuardrailResult(
                 passed=False,
                 reason=RejectionReason.VOLUME_TOO_LOW,
-                message=f"Volume {volume} below minimum {min_volume_limit}",
+                message=f"Volume {contract.volume or 0} below minimum {min_volume}",
             )
-
+        
         # Check open interest
-        open_interest = contract.open_interest or 0
-        min_oi_limits = {
-            RiskLevel.LOW: 100,
-            RiskLevel.MEDIUM: 50,
-            RiskLevel.HIGH: 10,
-        }
-        min_oi_limit = min_oi_limits.get(self.risk_level, 50)
-        if open_interest < min_oi_limit:
+        min_open_interest = self.risk_config.get("min_open_interest", 20)
+        if (contract.open_interest or 0) < min_open_interest:
             return RiskGuardrailResult(
                 passed=False,
                 reason=RejectionReason.OPEN_INTEREST_TOO_LOW,
-                message=f"Open interest {open_interest} below minimum {min_oi_limit}",
+                message=f"Open interest {contract.open_interest or 0} below minimum {min_open_interest}",
             )
-
+        
         # Check earnings window
         if contract.earnings_date:
             try:
-                earnings_dt = datetime.fromisoformat(contract.earnings_date)
-                now = datetime.now()
-                days_to_earnings = (earnings_dt - now).days
-                
-                earnings_buffer_limits = {
-                    RiskLevel.LOW: 5,
-                    RiskLevel.MEDIUM: 3,
-                    RiskLevel.HIGH: 1,
-                }
-                earnings_buffer = earnings_buffer_limits.get(self.risk_level, 3)
-                
-                if -earnings_buffer <= days_to_earnings <= earnings_buffer:
+                earnings_date = datetime.strptime(contract.earnings_date, "%Y-%m-%d").date()
+                earnings_buffer = self.risk_config.get("earnings_buffer_days", 5)
+                days_until_earnings = (earnings_date - datetime.now().date()).days
+                if -earnings_buffer <= days_until_earnings <= earnings_buffer:
                     return RiskGuardrailResult(
                         passed=False,
                         reason=RejectionReason.EARNINGS_WINDOW_RESTRICTED,
                         message=f"Trade within {earnings_buffer} days of earnings",
                     )
             except (ValueError, TypeError):
-                pass  # Invalid earnings date format, skip check
-
+                pass
+        
         # Check live trading approval
         if is_live_trading and not user_approved_live_trading:
             return RiskGuardrailResult(
@@ -673,30 +713,10 @@ class RiskEngine:
                 reason=RejectionReason.LIVE_TRADING_NOT_APPROVED,
                 message="Live trading is disabled by default. User approval required.",
             )
-
+        
         # All checks passed
         return RiskGuardrailResult(
             passed=True,
-            reason=RejectionReason.PASSED,
+            reason=RejectionReason.NONE,
             message="Trade passed all risk guardrails",
         )
-
-
-class OptionsService:
-    """Service for analyzing and scoring option contracts."""
-
-    def __init__(
-        self,
-        data_provider: Optional[DataProvider] = None,
-        risk_level: RiskLevel = RiskLevel.MEDIUM,
-    ):
-        """Initialize options service.
-        
-        Args:
-            data_provider: Optional data provider (defaults to MockDataProvider)
-            risk_level: Risk level for filtering and scoring
-        """
-        self.data_provider = data_provider or MockDataProvider()
-        self.risk_level = risk_level
-        self.risk_engine = RiskEngine(risk_level=risk_level)
-        self.filter = OptionsChainFilter()
