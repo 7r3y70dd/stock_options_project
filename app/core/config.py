@@ -100,6 +100,10 @@ class Config:
     DEFAULT_RISK_LEVEL: str = os.getenv("DEFAULT_RISK_LEVEL", "medium")
     MAX_DAILY_LOSS_PCT: float = float(os.getenv("MAX_DAILY_LOSS_PCT", "5.0"))
 
+    # Strategy Configuration
+    ENABLED_STRATEGIES: list = os.getenv("ENABLED_STRATEGIES", "").split(",") if os.getenv("ENABLED_STRATEGIES") else []
+    DISABLED_STRATEGIES: list = os.getenv("DISABLED_STRATEGIES", "").split(",") if os.getenv("DISABLED_STRATEGIES") else []
+
     # Logging
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
 
@@ -141,6 +145,25 @@ class Config:
             True if PAPER_TRADING_ENABLED is True
         """
         return cls.PAPER_TRADING_ENABLED
+
+    @classmethod
+    def is_strategy_enabled(cls, strategy_name: str) -> bool:
+        """Check if a strategy is enabled.
+        
+        Args:
+            strategy_name: Name of strategy to check
+            
+        Returns:
+            True if strategy is enabled (not in disabled list)
+        """
+        # If explicitly disabled, return False
+        if strategy_name in cls.DISABLED_STRATEGIES:
+            return False
+        # If enabled list is specified and strategy is in it, return True
+        if cls.ENABLED_STRATEGIES and strategy_name in cls.ENABLED_STRATEGIES:
+            return True
+        # If enabled list is empty, all strategies are enabled by default
+        return not cls.ENABLED_STRATEGIES
 
 
 # Export singleton config instance
