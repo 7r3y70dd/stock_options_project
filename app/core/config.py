@@ -124,6 +124,17 @@ class Config:
     CASH_SECURED_PUT_MIN_OPEN_INTEREST: int = int(os.getenv("CASH_SECURED_PUT_MIN_OPEN_INTEREST", "20"))
     CASH_SECURED_PUT_MAX_SPREAD_PCT: float = float(os.getenv("CASH_SECURED_PUT_MAX_SPREAD_PCT", "0.05"))
 
+    # Debit Spread Strategy Configuration
+    DEBIT_SPREAD_MIN_REWARD_RISK_RATIO: float = float(os.getenv("DEBIT_SPREAD_MIN_REWARD_RISK_RATIO", "1.0"))
+    DEBIT_SPREAD_MIN_SPREAD_WIDTH: float = float(os.getenv("DEBIT_SPREAD_MIN_SPREAD_WIDTH", "0.5"))
+    DEBIT_SPREAD_MAX_SPREAD_WIDTH: float = float(os.getenv("DEBIT_SPREAD_MAX_SPREAD_WIDTH", "5.0"))
+    DEBIT_SPREAD_MIN_DTE: int = int(os.getenv("DEBIT_SPREAD_MIN_DTE", "7"))
+    DEBIT_SPREAD_MAX_DTE: int = int(os.getenv("DEBIT_SPREAD_MAX_DTE", "60"))
+    DEBIT_SPREAD_MIN_VOLUME: int = int(os.getenv("DEBIT_SPREAD_MIN_VOLUME", "10"))
+    DEBIT_SPREAD_MIN_OPEN_INTEREST: int = int(os.getenv("DEBIT_SPREAD_MIN_OPEN_INTEREST", "20"))
+    DEBIT_SPREAD_MAX_SPREAD_PCT: float = float(os.getenv("DEBIT_SPREAD_MAX_SPREAD_PCT", "0.05"))
+    DEBIT_SPREAD_MAX_NET_DEBIT_PCT: float = float(os.getenv("DEBIT_SPREAD_MAX_NET_DEBIT_PCT", "0.05"))
+
     # Logging
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
 
