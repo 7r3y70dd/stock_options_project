@@ -17,6 +17,7 @@ from app.data_sources import (
     FinnhubProvider,
 )
 from app.models.database import Signal, Trade, OptionContract, NewsArticle, WatchlistSymbol
+from app.news.sentiment_analyzer import SentimentAnalyzer
 from services.options_service import VolatilityAnalyzer, GreeksAnalyzer
 from services import RiskLevel
 
@@ -25,6 +26,7 @@ logger = logging.getLogger(__name__)
 # Initialize default data provider (mock for now, can be swapped)
 _data_provider: Optional[DataProvider] = None
 _broker_provider: Optional[BrokerProvider] = None
+_sentiment_analyzer: Optional[SentimentAnalyzer] = None
 
 
 def get_data_provider() -> DataProvider:
@@ -129,6 +131,34 @@ def set_broker_provider(provider: BrokerProvider) -> None:
     global _broker_provider
     _broker_provider = provider
     logger.info(f"Broker provider set to {provider.__class__.__name__}")
+
+
+def get_sentiment_analyzer() -> SentimentAnalyzer:
+    """Get or initialize the sentiment analyzer.
+    
+    Returns:
+        SentimentAnalyzer instance
+    """
+    global _sentiment_analyzer
+    if _sentiment_analyzer is None:
+        _sentiment_analyzer = SentimentAnalyzer(
+            model_name=config.SENTIMENT_MODEL,
+            use_gpu=config.SENTIMENT_USE_GPU,
+        )
+        logger.info(f"Initialized SentimentAnalyzer with model: {config.SENTIMENT_MODEL}")
+    
+    return _sentiment_analyzer
+
+
+def set_sentiment_analyzer(analyzer: SentimentAnalyzer) -> None:
+    """Set the sentiment analyzer for background tasks.
+    
+    Args:
+        analyzer: SentimentAnalyzer instance to use
+    """
+    global _sentiment_analyzer
+    _sentiment_analyzer = analyzer
+    logger.info(f"Sentiment analyzer set to {analyzer.__class__.__name__}")
 
 
 def _calculate_volatility_context(
@@ -257,10 +287,10 @@ def refresh_market_data(self, watchlist_id: Optional[int] = None) -> dict:
     default_retry_delay=60,
 )
 def fetch_news(self, symbol: Optional[str] = None, limit: int = 10) -> dict:
-    """Fetch and store news articles for symbols.
+    """Fetch and store news articles for symbols with sentiment analysis.
     
-    Fetches news from the configured data provider and stores articles in the database.
-    Automatically deduplicates articles by URL and title.
+    Fetches news from the configured data provider, performs sentiment analysis,
+    and stores articles in the database. Automatically deduplicates articles by URL and title.
     
     Args:
         symbol: Optional specific symbol to fetch news for. If None, fetch for all watched symbols.
@@ -274,6 +304,7 @@ def fetch_news(self, symbol: Optional[str] = None, limit: int = 10) -> dict:
         
         db = SessionLocal()
         provider = get_data_provider()
+        sentiment_analyzer = get_sentiment_analyzer()
         
         try:
             # Determine which symbols to fetch
@@ -308,7 +339,7 @@ def fetch_news(self, symbol: Optional[str] = None, limit: int = 10) -> dict:
                     articles = provider.get_news(sym, limit=limit)
                     articles_fetched += len(articles)
                     
-                    # Store articles in database with deduplication
+                    # Store articles in database with deduplication and sentiment analysis
                     for article in articles:
                         try:
                             # Check if article already exists by URL (primary deduplication)
@@ -316,50 +347,54 @@ def fetch_news(self, symbol: Optional[str] = None, limit: int = 10) -> dict:
                                 existing_by_url = db.query(NewsArticle).filter(
                                     NewsArticle.url == article.url
                                 ).first()
-                                
                                 if existing_by_url:
-                                    logger.debug(f"Skipping duplicate article by URL: {article.url}")
+                                    logger.debug(f"Article already exists by URL: {article.url}")
                                     articles_duplicated += 1
                                     continue
                             
-                            # Check if article already exists by title and symbol (secondary deduplication)
+                            # Check if article already exists by title (secondary deduplication)
                             existing_by_title = db.query(NewsArticle).filter(
-                                NewsArticle.symbol == article.symbol,
-                                NewsArticle.title == article.title
+                                NewsArticle.symbol == sym,
+                                NewsArticle.title == article.title,
                             ).first()
-                            
                             if existing_by_title:
-                                logger.debug(f"Skipping duplicate article by title: {article.title}")
+                                logger.debug(f"Article already exists by title: {article.title}")
                                 articles_duplicated += 1
                                 continue
                             
-                            # Store new article
-                            db_article = NewsArticle(
-                                symbol=article.symbol,
-                                title=article.title,
-                                description=article.description,
-                                url=article.url,
-                                source=article.source,
-                                published_at=article.published_at,
-                                sentiment=article.sentiment,
-                                provider=provider.__class__.__name__,
-                            )
-                            db.add(db_article)
+                            # Perform sentiment analysis
+                            if config.SENTIMENT_ANALYSIS_ENABLED:
+                                # Combine title and description for analysis
+                                text_to_analyze = f"{article.title} {article.description or ''}".strip()
+                                
+                                sentiment_score, confidence_score = sentiment_analyzer.analyze(
+                                    text_to_analyze,
+                                    provider_sentiment=article.sentiment,
+                                )
+                                
+                                article.sentiment_score = sentiment_score
+                                article.confidence_score = confidence_score
+                                
+                                logger.debug(
+                                    f"Sentiment analysis for '{article.title[:50]}...': "
+                                    f"score={sentiment_score:.3f}, confidence={confidence_score:.3f}"
+                                )
+                            
+                            # Store article in database
+                            db.add(article)
+                            db.commit()
                             articles_stored += 1
-                            logger.debug(f"Stored new article: {article.title[:50]}...")
+                            logger.debug(f"Stored article: {article.title[:50]}...")
                             
                         except Exception as e:
-                            logger.warning(f"Error storing article for {sym}: {e}")
-                            errors.append(f"Error storing article for {sym}: {str(e)}")
+                            logger.warning(f"Error storing article: {e}")
+                            db.rollback()
+                            errors.append(str(e))
                             continue
-                    
-                    # Commit after each symbol to avoid losing progress
-                    db.commit()
                     
                 except Exception as e:
                     logger.warning(f"Error fetching news for {sym}: {e}")
-                    errors.append(f"Error fetching news for {sym}: {str(e)}")
-                    db.rollback()
+                    errors.append(f"{sym}: {str(e)}")
                     continue
             
             result = {
@@ -369,16 +404,14 @@ def fetch_news(self, symbol: Optional[str] = None, limit: int = 10) -> dict:
                 "articles_fetched": articles_fetched,
                 "articles_stored": articles_stored,
                 "articles_duplicated": articles_duplicated,
-                "symbols_processed": len(symbols_to_fetch),
                 "provider": provider.__class__.__name__,
+                "sentiment_analysis_enabled": config.SENTIMENT_ANALYSIS_ENABLED,
             }
             
             if errors:
                 result["errors"] = errors
-                logger.warning(f"News fetch completed with errors: {errors}")
-            else:
-                logger.info(f"News fetch completed successfully: {result}")
             
+            logger.info(f"News fetch completed: {result}")
             return result
             
         finally:
@@ -391,116 +424,32 @@ def fetch_news(self, symbol: Optional[str] = None, limit: int = 10) -> dict:
 
 
 @celery_app.task(
-    name="app.workers.tasks.fetch_news_for_watchlist",
-    bind=True,
-    max_retries=3,
-    default_retry_delay=60,
-)
-def fetch_news_for_watchlist(self, watchlist_id: Optional[int] = None) -> dict:
-    """Scheduled task to fetch news for watchlist symbols.
-    
-    This is the main entry point for scheduled news fetching.
-    
-    Args:
-        watchlist_id: Optional specific watchlist to fetch news for. If None, fetch for all.
-        
-    Returns:
-        Dictionary with fetch results
-    """
-    try:
-        logger.info(f"Starting scheduled news fetch for watchlist_id={watchlist_id}")
-        
-        db = SessionLocal()
-        
-        try:
-            # Determine which symbols to fetch
-            if watchlist_id:
-                watchlist_symbols = db.query(WatchlistSymbol).filter(
-                    WatchlistSymbol.watchlist_id == watchlist_id
-                ).all()
-            else:
-                watchlist_symbols = db.query(WatchlistSymbol).all()
-            
-            symbols_to_fetch = list(set([ws.symbol for ws in watchlist_symbols]))
-            
-            if not symbols_to_fetch:
-                logger.info(f"No symbols found for watchlist_id={watchlist_id}")
-                return {
-                    "status": "success",
-                    "watchlist_id": watchlist_id,
-                    "timestamp": datetime.utcnow().isoformat(),
-                    "symbols_processed": 0,
-                }
-            
-            # Fetch news for each symbol
-            total_articles_fetched = 0
-            total_articles_stored = 0
-            total_articles_duplicated = 0
-            
-            for sym in symbols_to_fetch:
-                result = fetch_news(sym, limit=10)
-                total_articles_fetched += result.get("articles_fetched", 0)
-                total_articles_stored += result.get("articles_stored", 0)
-                total_articles_duplicated += result.get("articles_duplicated", 0)
-            
-            final_result = {
-                "status": "success",
-                "watchlist_id": watchlist_id,
-                "timestamp": datetime.utcnow().isoformat(),
-                "symbols_processed": len(symbols_to_fetch),
-                "articles_fetched": total_articles_fetched,
-                "articles_stored": total_articles_stored,
-                "articles_duplicated": total_articles_duplicated,
-            }
-            
-            logger.info(f"Scheduled news fetch completed: {final_result}")
-            return final_result
-            
-        finally:
-            db.close()
-            
-    except Exception as exc:
-        logger.error(f"Scheduled news fetch failed: {exc}", exc_info=True)
-        # Retry with exponential backoff
-        raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
-
-
-@celery_app.task(
     name="app.workers.tasks.generate_signals",
     bind=True,
     max_retries=3,
     default_retry_delay=60,
 )
 def generate_signals(self, user_id: Optional[int] = None) -> dict:
-    """Generate trading signals based on current market data.
+    """Generate trading signals for watched symbols.
     
     Args:
         user_id: Optional specific user to generate signals for. If None, generate for all.
         
     Returns:
-        Dictionary with signal generation results
+        Dictionary with generation results
     """
     try:
         logger.info(f"Starting signal generation for user_id={user_id}")
         
         db = SessionLocal()
-        provider = get_data_provider()
         
         try:
-            # TODO: Implement actual signal generation logic
-            # Example:
-            # - Get user watchlists and symbols
-            # - Call provider.get_price_history() for technical analysis
-            # - Call provider.get_options_chain() for options data
-            # - Generate signals based on strategy rules
-            # - Store signals in database
-            
+            # TODO: Implement signal generation logic
             result = {
                 "status": "success",
                 "user_id": user_id,
                 "timestamp": datetime.utcnow().isoformat(),
                 "signals_generated": 0,
-                "provider": provider.__class__.__name__,
             }
             logger.info(f"Signal generation completed: {result}")
             return result
@@ -509,7 +458,6 @@ def generate_signals(self, user_id: Optional[int] = None) -> dict:
             
     except Exception as exc:
         logger.error(f"Signal generation failed: {exc}", exc_info=True)
-        # Retry with exponential backoff
         raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
 
 
@@ -523,7 +471,7 @@ def monitor_trades(self, user_id: Optional[int] = None) -> dict:
     """Monitor open trades and update their status.
     
     Args:
-        user_id: Optional specific user to monitor trades for. If None, monitor all.
+        user_id: Optional specific user to monitor. If None, monitor all.
         
     Returns:
         Dictionary with monitoring results
@@ -532,26 +480,14 @@ def monitor_trades(self, user_id: Optional[int] = None) -> dict:
         logger.info(f"Starting trade monitoring for user_id={user_id}")
         
         db = SessionLocal()
-        provider = get_data_provider()
-        broker = get_broker_provider()
         
         try:
-            # TODO: Implement actual trade monitoring logic
-            # Example:
-            # - Get open trades for user
-            # - Call provider.get_quote() for current prices
-            # - Calculate current P/L
-            # - Check stop-loss and take-profit levels
-            # - Update trade status if closed
-            # - Generate alerts if needed
-            
+            # TODO: Implement trade monitoring logic
             result = {
                 "status": "success",
                 "user_id": user_id,
                 "timestamp": datetime.utcnow().isoformat(),
                 "trades_monitored": 0,
-                "trades_closed": 0,
-                "provider": provider.__class__.__name__,
             }
             logger.info(f"Trade monitoring completed: {result}")
             return result
@@ -560,5 +496,22 @@ def monitor_trades(self, user_id: Optional[int] = None) -> dict:
             
     except Exception as exc:
         logger.error(f"Trade monitoring failed: {exc}", exc_info=True)
-        # Retry with exponential backoff
         raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
+
+
+@celery_app.task(
+    name="app.workers.tasks.fetch_news_for_watchlist",
+    bind=True,
+    max_retries=3,
+    default_retry_delay=60,
+)
+def fetch_news_for_watchlist(self) -> dict:
+    """Scheduled task to fetch news for all watchlist symbols.
+    
+    This is the main entry point for the scheduled news fetching job.
+    
+    Returns:
+        Dictionary with fetch results
+    """
+    logger.info("Starting scheduled news fetch for watchlist")
+    return fetch_news.apply_async(args=[None, 10]).get()

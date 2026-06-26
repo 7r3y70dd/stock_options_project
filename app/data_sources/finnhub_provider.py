@@ -345,106 +345,126 @@ class FinnhubProvider(DataProvider):
             Empty list (Finnhub free tier limitation)
         """
         logger.warning(
-            f"Options chain data not available from Finnhub free tier. "
-            f"Use Alpha Vantage, yfinance, or Polygon for options data."
+            f"Finnhub free tier does not provide options chain data. "
+            f"Please use a different provider or upgrade to Finnhub paid tier."
         )
         return []
 
-    def get_news(self, symbol: str, limit: int = 10) -> List[NewsArticle]:
-        """Get recent news articles for a symbol.
+    def get_news(
+        self,
+        symbol: str,
+        limit: int = 10,
+    ) -> List[NewsArticle]:
+        """Get news articles for a symbol.
+        
+        Fetches company news from Finnhub with sentiment analysis.
+        Finnhub provides sentiment scores that are normalized to -1.0 to 1.0 range.
         
         Args:
             symbol: Stock ticker symbol (e.g., "AAPL")
             limit: Maximum number of articles to return
             
         Returns:
-            List of NewsArticle objects sorted by date descending (newest first)
+            List of NewsArticle objects sorted by date descending
         """
         try:
-            # Finnhub company-news endpoint
             data = self._api_call(
                 "company-news",
                 {
                     "symbol": symbol.upper(),
-                    "from": (datetime.utcnow() - timedelta(days=30)).strftime("%Y-%m-%d"),
-                    "to": datetime.utcnow().strftime("%Y-%m-%d"),
+                    "limit": str(limit),
                 },
             )
             
-            if not data or not isinstance(data, list):
+            if not data or "data" not in data:
                 logger.warning(f"No news data for symbol {symbol}")
                 return []
             
             articles = []
-            for item in data[:limit]:
+            for item in data.get("data", []):
                 try:
-                    # Parse timestamp (Finnhub provides Unix timestamp)
+                    # Parse published timestamp
                     published_ts = item.get("datetime")
-                    published_at = None
                     if published_ts:
                         published_at = datetime.fromtimestamp(published_ts)
+                    else:
+                        published_at = datetime.utcnow()
+                    
+                    # Extract sentiment from Finnhub if available
+                    # Finnhub provides sentiment as a float, we normalize it
+                    finnhub_sentiment = item.get("sentiment")  # Can be positive, negative, neutral
+                    sentiment_label = None
+                    sentiment_score = None
+                    
+                    if finnhub_sentiment:
+                        sentiment_label = finnhub_sentiment.lower()
+                        # Map Finnhub sentiment to normalized score
+                        if sentiment_label == "positive":
+                            sentiment_score = 0.5  # Placeholder, will be refined by local model
+                        elif sentiment_label == "negative":
+                            sentiment_score = -0.5
+                        else:  # neutral
+                            sentiment_score = 0.0
                     
                     article = NewsArticle(
                         symbol=symbol.upper(),
                         title=item.get("headline", ""),
-                        description=item.get("summary"),
+                        description=item.get("summary", ""),
                         url=item.get("url"),
                         source=item.get("source"),
                         published_at=published_at,
-                        sentiment=None,  # Finnhub free tier doesn't provide sentiment
+                        sentiment=sentiment_label,
+                        sentiment_score=sentiment_score,  # Will be updated by sentiment analyzer
+                        confidence_score=None,  # Will be set by sentiment analyzer
                     )
                     articles.append(article)
                 except Exception as e:
-                    logger.warning(f"Error parsing news item: {e}")
+                    logger.warning(f"Error parsing news article: {e}")
                     continue
             
-            # Sort by date descending (newest first)
-            articles.sort(key=lambda a: a.published_at or datetime.min, reverse=True)
-            return articles
+            # Sort by date descending
+            return sorted(articles, key=lambda a: a.published_at, reverse=True)
             
         except Exception as e:
             logger.error(f"Error getting news for {symbol}: {e}", exc_info=True)
             return []
 
-    def get_earnings_date(self, symbol: str) -> Optional[EarningsDate]:
+    def get_earnings_date(
+        self,
+        symbol: str,
+    ) -> Optional[EarningsDate]:
         """Get next earnings date for a symbol.
         
         Args:
             symbol: Stock ticker symbol (e.g., "AAPL")
             
         Returns:
-            EarningsDate object with next earnings info, or None if not available
+            EarningsDate object with next earnings date, or None if not available
         """
         try:
-            # Finnhub earnings calendar endpoint
             data = self._api_call(
                 "calendar/earnings",
-                {
-                    "symbol": symbol.upper(),
-                    "from": datetime.utcnow().strftime("%Y-%m-%d"),
-                    "to": (datetime.utcnow() + timedelta(days=365)).strftime("%Y-%m-%d"),
-                },
+                {"symbol": symbol.upper()},
             )
             
-            if not data or "earningsCalendar" not in data or not data["earningsCalendar"]:
-                logger.warning(f"No earnings date for symbol {symbol}")
+            if not data or "earningsCalendar" not in data:
+                logger.warning(f"No earnings data for symbol {symbol}")
+                return None
+            
+            earnings_list = data.get("earningsCalendar", [])
+            if not earnings_list:
                 return None
             
             # Get the first (next) earnings date
-            earnings_item = data["earningsCalendar"][0]
+            next_earnings = earnings_list[0]
+            earnings_date_str = next_earnings.get("date")
             
-            earnings_date = earnings_item.get("date")
-            if not earnings_date:
+            if not earnings_date_str:
                 return None
             
             return EarningsDate(
                 symbol=symbol.upper(),
-                date=earnings_date,
-                time=earnings_item.get("hour"),
-                eps_estimate=earnings_item.get("epsEstimate"),
-                eps_actual=earnings_item.get("epsActual"),
-                revenue_estimate=earnings_item.get("revenueEstimate"),
-                revenue_actual=earnings_item.get("revenueActual"),
+                date=earnings_date_str,  # Expected format: YYYY-MM-DD
             )
             
         except Exception as e:
