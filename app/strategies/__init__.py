@@ -15,6 +15,7 @@ from app.strategies.strategy import (
 from app.strategies.covered_call import CoveredCallStrategy
 from app.strategies.cash_secured_put import CashSecuredPutStrategy
 from app.strategies.debit_spread import DebitSpreadStrategy
+from app.strategies.credit_spread import CreditSpreadStrategy
 
 __all__ = [
     "MarketData",
@@ -27,4 +28,5 @@ __all__ = [
     "CoveredCallStrategy",
     "CashSecuredPutStrategy",
     "DebitSpreadStrategy",
+    "CreditSpreadStrategy",
 ]
