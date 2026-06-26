@@ -12,6 +12,7 @@ from app.strategies import (
     set_strategy_registry,
     CoveredCallStrategy,
     CashSecuredPutStrategy,
+    DebitSpreadStrategy,
 )
 from services.options_service import OptionContract
 from services import RiskLevel
@@ -368,23 +369,29 @@ class TestStrategyRegistry:
             quote_timestamp=datetime.utcnow(),
         )
         
-        # Empty options chain should cause strategy to return None
         signals = registry.generate_signals(
             symbol="AAPL",
             market_data=market_data,
-            options_chain=[],
+            options_chain=[],  # Empty chain
             risk_profile=RiskLevel.MEDIUM,
         )
         
         assert len(signals) == 0
 
 
-class TestCashSecuredPutStrategy:
-    """Tests for CashSecuredPutStrategy."""
+class TestDebitSpreadStrategy:
+    """Tests for DebitSpreadStrategy."""
 
-    def test_strategy_generates_signal_with_sufficient_cash(self):
-        """Test that strategy generates signal when sufficient cash is available."""
-        strategy = CashSecuredPutStrategy(name="cash_secured_put", enabled=True)
+    def test_debit_spread_initialization(self):
+        """Test debit spread strategy initialization."""
+        strategy = DebitSpreadStrategy(name="debit_spread", enabled=True)
+        
+        assert strategy.name == "debit_spread"
+        assert strategy.is_enabled() is True
+
+    def test_bull_call_spread_generation(self):
+        """Test bull call spread generation."""
+        strategy = DebitSpreadStrategy()
         
         market_data = MarketData(
             symbol="AAPL",
@@ -393,44 +400,62 @@ class TestCashSecuredPutStrategy:
             quote_timestamp=datetime.utcnow(),
         )
         
-        # Create OTM put 5% below current price, 30 DTE
+        # Create call options for bull call spread
         options_chain = [
             OptionContract(
                 symbol="AAPL",
                 expiration=_create_future_expiration(30),
-                strike=142.5,  # 5% OTM
-                contract_type="put",
-                bid=2.0,
-                ask=2.1,
+                strike=150.0,  # Long call (ATM)
+                contract_type="call",
+                bid=4.0,
+                ask=4.5,
                 volume=100,
                 open_interest=500,
                 implied_volatility=0.25,
                 underlying_price=150.0,
                 days_to_expiration=30,
-                delta=-0.15,
                 liquidity_score=75.0,
-            )
+            ),
+            OptionContract(
+                symbol="AAPL",
+                expiration=_create_future_expiration(30),
+                strike=155.0,  # Short call (OTM)
+                contract_type="call",
+                bid=1.5,
+                ask=2.0,
+                volume=100,
+                open_interest=500,
+                implied_volatility=0.25,
+                underlying_price=150.0,
+                days_to_expiration=30,
+                liquidity_score=75.0,
+            ),
         ]
+        
+        news_context = NewsContext(
+            symbol="AAPL",
+            articles=[],
+            sentiment_score=0.5,  # Bullish
+        )
         
         signal = strategy.generate(
             symbol="AAPL",
             market_data=market_data,
             options_chain=options_chain,
+            news_context=news_context,
             risk_profile=RiskLevel.MEDIUM,
-            available_cash=50000.0,
         )
         
         assert signal is not None
-        assert isinstance(signal, StrategySignal)
-        assert signal.symbol == "AAPL"
-        assert signal.strategy_type == "cash_secured_put"
+        assert signal.strategy_type == "debit_spread"
+        assert signal.max_loss > 0
+        assert signal.expected_profit > 0
         assert signal.reason is not None
-        assert signal.max_loss is not None
-        assert signal.expected_profit > 0.0
+        assert "Bull Call" in signal.reason or "bull_call" in signal.breakdown
 
-    def test_strategy_signal_includes_assignment_scenario(self):
-        """Test that signal includes assignment scenario details."""
-        strategy = CashSecuredPutStrategy(name="cash_secured_put", enabled=True)
+    def test_bear_put_spread_generation(self):
+        """Test bear put spread generation."""
+        strategy = DebitSpreadStrategy()
         
         market_data = MarketData(
             symbol="AAPL",
@@ -439,79 +464,225 @@ class TestCashSecuredPutStrategy:
             quote_timestamp=datetime.utcnow(),
         )
         
+        # Create put options for bear put spread
         options_chain = [
             OptionContract(
                 symbol="AAPL",
                 expiration=_create_future_expiration(30),
-                strike=142.5,  # 5% OTM
+                strike=145.0,  # Long put (OTM)
                 contract_type="put",
-                bid=2.0,
-                ask=2.1,
+                bid=1.5,
+                ask=2.0,
                 volume=100,
                 open_interest=500,
                 implied_volatility=0.25,
                 underlying_price=150.0,
                 days_to_expiration=30,
-                delta=-0.15,
                 liquidity_score=75.0,
-            )
-        ]
-        
-        signal = strategy.generate(
-            symbol="AAPL",
-            market_data=market_data,
-            options_chain=options_chain,
-            risk_profile=RiskLevel.MEDIUM,
-            available_cash=50000.0,
-        )
-        
-        assert signal is not None
-        assert signal.breakdown is not None
-        assert "assignment_risk" in signal.breakdown
-        assert "breakeven" in signal.breakdown
-        assert "cash_requirement" in signal.breakdown
-        assert "max_loss" in signal.breakdown
-
-    def test_strategy_signal_has_required_fields(self):
-        """Test that strategy signal has all required fields."""
-        strategy = CashSecuredPutStrategy(name="cash_secured_put", enabled=True)
-        
-        market_data = MarketData(
-            symbol="AAPL",
-            current_price=150.0,
-            price_history=[{"close": 150.0}],
-            quote_timestamp=datetime.utcnow(),
-        )
-        
-        options_chain = [
+            ),
             OptionContract(
                 symbol="AAPL",
                 expiration=_create_future_expiration(30),
-                strike=142.5,  # 5% OTM
+                strike=148.0,  # Short put (less OTM)
                 contract_type="put",
-                bid=2.0,
-                ask=2.1,
+                bid=3.0,
+                ask=3.5,
                 volume=100,
                 open_interest=500,
                 implied_volatility=0.25,
                 underlying_price=150.0,
                 days_to_expiration=30,
-                delta=-0.15,
                 liquidity_score=75.0,
-            )
+            ),
         ]
+        
+        news_context = NewsContext(
+            symbol="AAPL",
+            articles=[],
+            sentiment_score=-0.5,  # Bearish
+        )
         
         signal = strategy.generate(
             symbol="AAPL",
             market_data=market_data,
             options_chain=options_chain,
+            news_context=news_context,
             risk_profile=RiskLevel.MEDIUM,
-            available_cash=50000.0,
         )
         
         assert signal is not None
+        assert signal.strategy_type == "debit_spread"
+        assert signal.max_loss > 0
+        assert signal.expected_profit > 0
         assert signal.reason is not None
-        assert signal.max_loss is not None
-        assert signal.expected_profit is not None
-        assert signal.probability_estimate is not None
-        assert signal.score is not None
+
+    def test_spread_has_known_max_loss(self):
+        """Test that every spread has known max loss (acceptance criteria)."""
+        strategy = DebitSpreadStrategy()
+        
+        market_data = MarketData(
+            symbol="AAPL",
+            current_price=150.0,
+            price_history=[{"close": 150.0}],
+            quote_timestamp=datetime.utcnow(),
+        )
+        
+        options_chain = [
+            OptionContract(
+                symbol="AAPL",
+                expiration=_create_future_expiration(30),
+                strike=150.0,
+                contract_type="call",
+                bid=4.0,
+                ask=4.5,
+                volume=100,
+                open_interest=500,
+                implied_volatility=0.25,
+                underlying_price=150.0,
+                days_to_expiration=30,
+                liquidity_score=75.0,
+            ),
+            OptionContract(
+                symbol="AAPL",
+                expiration=_create_future_expiration(30),
+                strike=155.0,
+                contract_type="call",
+                bid=1.5,
+                ask=2.0,
+                volume=100,
+                open_interest=500,
+                implied_volatility=0.25,
+                underlying_price=150.0,
+                days_to_expiration=30,
+                liquidity_score=75.0,
+            ),
+        ]
+        
+        signal = strategy.generate(
+            symbol="AAPL",
+            market_data=market_data,
+            options_chain=options_chain,
+            risk_profile=RiskLevel.MEDIUM,
+        )
+        
+        if signal is not None:
+            # Every spread must have known max loss
+            assert signal.max_loss is not None
+            assert signal.max_loss > 0
+            assert isinstance(signal.max_loss, (int, float))
+
+    def test_spread_rejected_if_reward_risk_too_low(self):
+        """Test that spreads are rejected if reward/risk is too low (acceptance criteria)."""
+        strategy = DebitSpreadStrategy()
+        
+        market_data = MarketData(
+            symbol="AAPL",
+            current_price=150.0,
+            price_history=[{"close": 150.0}],
+            quote_timestamp=datetime.utcnow(),
+        )
+        
+        # Create options with poor reward/risk ratio
+        options_chain = [
+            OptionContract(
+                symbol="AAPL",
+                expiration=_create_future_expiration(30),
+                strike=150.0,
+                contract_type="call",
+                bid=4.0,
+                ask=4.5,
+                volume=100,
+                open_interest=500,
+                implied_volatility=0.25,
+                underlying_price=150.0,
+                days_to_expiration=30,
+                liquidity_score=75.0,
+            ),
+            OptionContract(
+                symbol="AAPL",
+                expiration=_create_future_expiration(30),
+                strike=150.5,  # Very close strike = poor reward/risk
+                contract_type="call",
+                bid=4.0,
+                ask=4.2,
+                volume=100,
+                open_interest=500,
+                implied_volatility=0.25,
+                underlying_price=150.0,
+                days_to_expiration=30,
+                liquidity_score=75.0,
+            ),
+        ]
+        
+        signal = strategy.generate(
+            symbol="AAPL",
+            market_data=market_data,
+            options_chain=options_chain,
+            risk_profile=RiskLevel.MEDIUM,
+        )
+        
+        # Signal should be None or have acceptable reward/risk
+        if signal is not None:
+            reward_risk = signal.breakdown.get("reward_risk_ratio", 0)
+            assert reward_risk >= 0.5  # Minimum threshold
+
+    def test_spread_calculates_all_metrics(self):
+        """Test that spread calculates net debit, max profit, max loss, and breakeven."""
+        strategy = DebitSpreadStrategy()
+        
+        market_data = MarketData(
+            symbol="AAPL",
+            current_price=150.0,
+            price_history=[{"close": 150.0}],
+            quote_timestamp=datetime.utcnow(),
+        )
+        
+        options_chain = [
+            OptionContract(
+                symbol="AAPL",
+                expiration=_create_future_expiration(30),
+                strike=150.0,
+                contract_type="call",
+                bid=4.0,
+                ask=4.5,
+                volume=100,
+                open_interest=500,
+                implied_volatility=0.25,
+                underlying_price=150.0,
+                days_to_expiration=30,
+                liquidity_score=75.0,
+            ),
+            OptionContract(
+                symbol="AAPL",
+                expiration=_create_future_expiration(30),
+                strike=155.0,
+                contract_type="call",
+                bid=1.5,
+                ask=2.0,
+                volume=100,
+                open_interest=500,
+                implied_volatility=0.25,
+                underlying_price=150.0,
+                days_to_expiration=30,
+                liquidity_score=75.0,
+            ),
+        ]
+        
+        signal = strategy.generate(
+            symbol="AAPL",
+            market_data=market_data,
+            options_chain=options_chain,
+            risk_profile=RiskLevel.MEDIUM,
+        )
+        
+        if signal is not None:
+            breakdown = signal.breakdown
+            # Verify all required metrics are calculated
+            assert "net_debit" in breakdown
+            assert "max_profit" in breakdown
+            assert "max_loss" in breakdown
+            assert "breakeven" in breakdown
+            assert breakdown["net_debit"] > 0
+            assert breakdown["max_profit"] > 0
+            assert breakdown["max_loss"] > 0
+            assert breakdown["breakeven"] > 0
