@@ -3,6 +3,7 @@
 import logging
 from celery import Celery
 from celery.signals import task_failure, task_success, task_retry
+from celery.schedules import schedule
 
 from app.core.config import config
 
@@ -29,8 +30,32 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,
     task_routes={
         "app.workers.tasks.refresh_market_data": {"queue": "data_fetching"},
+        "app.workers.tasks.fetch_news": {"queue": "data_fetching"},
+        "app.workers.tasks.fetch_news_for_watchlist": {"queue": "data_fetching"},
         "app.workers.tasks.generate_signals": {"queue": "signal_generation"},
         "app.workers.tasks.monitor_trades": {"queue": "trade_monitoring"},
+    },
+    beat_schedule={
+        "refresh-market-data": {
+            "task": "app.workers.tasks.refresh_market_data",
+            "schedule": config.DATA_REFRESH_INTERVAL_SECONDS,
+            "args": (None,),
+        },
+        "fetch-news-for-watchlist": {
+            "task": "app.workers.tasks.fetch_news_for_watchlist",
+            "schedule": config.NEWS_FETCH_INTERVAL_SECONDS,
+            "args": (None,),
+        },
+        "generate-signals": {
+            "task": "app.workers.tasks.generate_signals",
+            "schedule": config.SIGNAL_GENERATION_INTERVAL_SECONDS,
+            "args": (None,),
+        },
+        "monitor-trades": {
+            "task": "app.workers.tasks.monitor_trades",
+            "schedule": config.TRADE_MONITORING_INTERVAL_SECONDS,
+            "args": (None,),
+        },
     },
 )
 

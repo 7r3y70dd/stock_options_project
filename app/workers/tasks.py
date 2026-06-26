@@ -16,7 +16,7 @@ from app.data_sources import (
     YfinanceProvider,
     FinnhubProvider,
 )
-from app.models.database import Signal, Trade, OptionContract, NewsArticle
+from app.models.database import Signal, Trade, OptionContract, NewsArticle, WatchlistSymbol
 from services.options_service import VolatilityAnalyzer, GreeksAnalyzer
 from services import RiskLevel
 
@@ -260,7 +260,7 @@ def fetch_news(self, symbol: Optional[str] = None, limit: int = 10) -> dict:
     """Fetch and store news articles for symbols.
     
     Fetches news from the configured data provider and stores articles in the database.
-    Automatically deduplicates articles by URL.
+    Automatically deduplicates articles by URL and title.
     
     Args:
         symbol: Optional specific symbol to fetch news for. If None, fetch for all watched symbols.
@@ -276,13 +276,34 @@ def fetch_news(self, symbol: Optional[str] = None, limit: int = 10) -> dict:
         provider = get_data_provider()
         
         try:
-            symbols_to_fetch = [symbol] if symbol else ["AAPL", "MSFT", "GOOGL", "TSLA", "AMZN"]
+            # Determine which symbols to fetch
+            if symbol:
+                symbols_to_fetch = [symbol.upper()]
+            else:
+                # Fetch for all watched symbols from all watchlists
+                watchlist_symbols = db.query(WatchlistSymbol).all()
+                symbols_to_fetch = list(set([ws.symbol for ws in watchlist_symbols]))
+                
+                if not symbols_to_fetch:
+                    logger.info("No symbols in watchlists to fetch news for")
+                    return {
+                        "status": "success",
+                        "symbol": None,
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "articles_fetched": 0,
+                        "articles_stored": 0,
+                        "articles_duplicated": 0,
+                        "provider": provider.__class__.__name__,
+                    }
+            
             articles_fetched = 0
             articles_stored = 0
             articles_duplicated = 0
+            errors = []
             
             for sym in symbols_to_fetch:
                 try:
+                    logger.debug(f"Fetching news for symbol: {sym}")
                     # Fetch news from provider
                     articles = provider.get_news(sym, limit=limit)
                     articles_fetched += len(articles)
@@ -290,16 +311,27 @@ def fetch_news(self, symbol: Optional[str] = None, limit: int = 10) -> dict:
                     # Store articles in database with deduplication
                     for article in articles:
                         try:
-                            # Check if article already exists by URL
+                            # Check if article already exists by URL (primary deduplication)
                             if article.url:
-                                existing = db.query(NewsArticle).filter(
+                                existing_by_url = db.query(NewsArticle).filter(
                                     NewsArticle.url == article.url
                                 ).first()
                                 
-                                if existing:
-                                    logger.debug(f"Skipping duplicate article: {article.url}")
+                                if existing_by_url:
+                                    logger.debug(f"Skipping duplicate article by URL: {article.url}")
                                     articles_duplicated += 1
                                     continue
+                            
+                            # Check if article already exists by title and symbol (secondary deduplication)
+                            existing_by_title = db.query(NewsArticle).filter(
+                                NewsArticle.symbol == article.symbol,
+                                NewsArticle.title == article.title
+                            ).first()
+                            
+                            if existing_by_title:
+                                logger.debug(f"Skipping duplicate article by title: {article.title}")
+                                articles_duplicated += 1
+                                continue
                             
                             # Store new article
                             db_article = NewsArticle(
@@ -314,14 +346,20 @@ def fetch_news(self, symbol: Optional[str] = None, limit: int = 10) -> dict:
                             )
                             db.add(db_article)
                             articles_stored += 1
+                            logger.debug(f"Stored new article: {article.title[:50]}...")
+                            
                         except Exception as e:
                             logger.warning(f"Error storing article for {sym}: {e}")
+                            errors.append(f"Error storing article for {sym}: {str(e)}")
                             continue
                     
+                    # Commit after each symbol to avoid losing progress
                     db.commit()
                     
                 except Exception as e:
                     logger.warning(f"Error fetching news for {sym}: {e}")
+                    errors.append(f"Error fetching news for {sym}: {str(e)}")
+                    db.rollback()
                     continue
             
             result = {
@@ -331,14 +369,196 @@ def fetch_news(self, symbol: Optional[str] = None, limit: int = 10) -> dict:
                 "articles_fetched": articles_fetched,
                 "articles_stored": articles_stored,
                 "articles_duplicated": articles_duplicated,
+                "symbols_processed": len(symbols_to_fetch),
                 "provider": provider.__class__.__name__,
             }
-            logger.info(f"News fetch completed: {result}")
+            
+            if errors:
+                result["errors"] = errors
+                logger.warning(f"News fetch completed with errors: {errors}")
+            else:
+                logger.info(f"News fetch completed successfully: {result}")
+            
             return result
+            
         finally:
             db.close()
             
     except Exception as exc:
         logger.error(f"News fetch failed: {exc}", exc_info=True)
+        # Retry with exponential backoff
+        raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
+
+
+@celery_app.task(
+    name="app.workers.tasks.fetch_news_for_watchlist",
+    bind=True,
+    max_retries=3,
+    default_retry_delay=60,
+)
+def fetch_news_for_watchlist(self, watchlist_id: Optional[int] = None) -> dict:
+    """Scheduled task to fetch news for watchlist symbols.
+    
+    This is the main entry point for scheduled news fetching.
+    
+    Args:
+        watchlist_id: Optional specific watchlist to fetch news for. If None, fetch for all.
+        
+    Returns:
+        Dictionary with fetch results
+    """
+    try:
+        logger.info(f"Starting scheduled news fetch for watchlist_id={watchlist_id}")
+        
+        db = SessionLocal()
+        
+        try:
+            # Determine which symbols to fetch
+            if watchlist_id:
+                watchlist_symbols = db.query(WatchlistSymbol).filter(
+                    WatchlistSymbol.watchlist_id == watchlist_id
+                ).all()
+            else:
+                watchlist_symbols = db.query(WatchlistSymbol).all()
+            
+            symbols_to_fetch = list(set([ws.symbol for ws in watchlist_symbols]))
+            
+            if not symbols_to_fetch:
+                logger.info(f"No symbols found for watchlist_id={watchlist_id}")
+                return {
+                    "status": "success",
+                    "watchlist_id": watchlist_id,
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "symbols_processed": 0,
+                }
+            
+            # Fetch news for each symbol
+            total_articles_fetched = 0
+            total_articles_stored = 0
+            total_articles_duplicated = 0
+            
+            for sym in symbols_to_fetch:
+                result = fetch_news(sym, limit=10)
+                total_articles_fetched += result.get("articles_fetched", 0)
+                total_articles_stored += result.get("articles_stored", 0)
+                total_articles_duplicated += result.get("articles_duplicated", 0)
+            
+            final_result = {
+                "status": "success",
+                "watchlist_id": watchlist_id,
+                "timestamp": datetime.utcnow().isoformat(),
+                "symbols_processed": len(symbols_to_fetch),
+                "articles_fetched": total_articles_fetched,
+                "articles_stored": total_articles_stored,
+                "articles_duplicated": total_articles_duplicated,
+            }
+            
+            logger.info(f"Scheduled news fetch completed: {final_result}")
+            return final_result
+            
+        finally:
+            db.close()
+            
+    except Exception as exc:
+        logger.error(f"Scheduled news fetch failed: {exc}", exc_info=True)
+        # Retry with exponential backoff
+        raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
+
+
+@celery_app.task(
+    name="app.workers.tasks.generate_signals",
+    bind=True,
+    max_retries=3,
+    default_retry_delay=60,
+)
+def generate_signals(self, user_id: Optional[int] = None) -> dict:
+    """Generate trading signals based on current market data.
+    
+    Args:
+        user_id: Optional specific user to generate signals for. If None, generate for all.
+        
+    Returns:
+        Dictionary with signal generation results
+    """
+    try:
+        logger.info(f"Starting signal generation for user_id={user_id}")
+        
+        db = SessionLocal()
+        provider = get_data_provider()
+        
+        try:
+            # TODO: Implement actual signal generation logic
+            # Example:
+            # - Get user watchlists and symbols
+            # - Call provider.get_price_history() for technical analysis
+            # - Call provider.get_options_chain() for options data
+            # - Generate signals based on strategy rules
+            # - Store signals in database
+            
+            result = {
+                "status": "success",
+                "user_id": user_id,
+                "timestamp": datetime.utcnow().isoformat(),
+                "signals_generated": 0,
+                "provider": provider.__class__.__name__,
+            }
+            logger.info(f"Signal generation completed: {result}")
+            return result
+        finally:
+            db.close()
+            
+    except Exception as exc:
+        logger.error(f"Signal generation failed: {exc}", exc_info=True)
+        # Retry with exponential backoff
+        raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
+
+
+@celery_app.task(
+    name="app.workers.tasks.monitor_trades",
+    bind=True,
+    max_retries=3,
+    default_retry_delay=60,
+)
+def monitor_trades(self, user_id: Optional[int] = None) -> dict:
+    """Monitor open trades and update their status.
+    
+    Args:
+        user_id: Optional specific user to monitor trades for. If None, monitor all.
+        
+    Returns:
+        Dictionary with monitoring results
+    """
+    try:
+        logger.info(f"Starting trade monitoring for user_id={user_id}")
+        
+        db = SessionLocal()
+        provider = get_data_provider()
+        broker = get_broker_provider()
+        
+        try:
+            # TODO: Implement actual trade monitoring logic
+            # Example:
+            # - Get open trades for user
+            # - Call provider.get_quote() for current prices
+            # - Calculate current P/L
+            # - Check stop-loss and take-profit levels
+            # - Update trade status if closed
+            # - Generate alerts if needed
+            
+            result = {
+                "status": "success",
+                "user_id": user_id,
+                "timestamp": datetime.utcnow().isoformat(),
+                "trades_monitored": 0,
+                "trades_closed": 0,
+                "provider": provider.__class__.__name__,
+            }
+            logger.info(f"Trade monitoring completed: {result}")
+            return result
+        finally:
+            db.close()
+            
+    except Exception as exc:
+        logger.error(f"Trade monitoring failed: {exc}", exc_info=True)
         # Retry with exponential backoff
         raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
