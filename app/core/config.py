@@ -147,6 +147,17 @@ class Config:
     CREDIT_SPREAD_MIN_CREDIT: float = float(os.getenv("CREDIT_SPREAD_MIN_CREDIT", "0.10"))
     CREDIT_SPREAD_MIN_RETURN_ON_RISK: float = float(os.getenv("CREDIT_SPREAD_MIN_RETURN_ON_RISK", "0.20"))
 
+    # Long Call/Put Strategy Configuration
+    LONG_CALL_PUT_MIN_DTE: int = int(os.getenv("LONG_CALL_PUT_MIN_DTE", "7"))
+    LONG_CALL_PUT_MAX_DTE: int = int(os.getenv("LONG_CALL_PUT_MAX_DTE", "60"))
+    LONG_CALL_PUT_MIN_VOLUME: int = int(os.getenv("LONG_CALL_PUT_MIN_VOLUME", "10"))
+    LONG_CALL_PUT_MIN_OPEN_INTEREST: int = int(os.getenv("LONG_CALL_PUT_MIN_OPEN_INTEREST", "20"))
+    LONG_CALL_PUT_MIN_LIQUIDITY_SCORE: float = float(os.getenv("LONG_CALL_PUT_MIN_LIQUIDITY_SCORE", "50.0"))
+    LONG_CALL_PUT_MIN_DELTA: float = float(os.getenv("LONG_CALL_PUT_MIN_DELTA", "0.40"))
+    LONG_CALL_PUT_MAX_DELTA: float = float(os.getenv("LONG_CALL_PUT_MAX_DELTA", "0.70"))
+    LONG_CALL_PUT_MAX_OTM_THRESHOLD: float = float(os.getenv("LONG_CALL_PUT_MAX_OTM_THRESHOLD", "0.15"))
+    LONG_CALL_PUT_MAX_PREMIUM: float = float(os.getenv("LONG_CALL_PUT_MAX_PREMIUM", "1000.0"))
+
     # Logging
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
 

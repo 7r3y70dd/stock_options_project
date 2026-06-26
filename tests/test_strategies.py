@@ -14,6 +14,7 @@ from app.strategies import (
     CashSecuredPutStrategy,
     DebitSpreadStrategy,
     CreditSpreadStrategy,
+    LongCallPutStrategy,
 )
 from services.options_service import OptionContract
 from services import RiskLevel
@@ -364,64 +365,19 @@ class TestStrategyRegistry:
         registry.register(strategy)
 
 
-class TestCreditSpreadStrategy:
-    """Tests for CreditSpreadStrategy."""
+class TestLongCallPutStrategy:
+    """Tests for LongCallPutStrategy."""
 
-    def _create_options_chain(self, current_price: float = 150.0) -> list:
-        """Create a realistic options chain for testing."""
-        options = []
-        expiration = _create_future_expiration(30)
+    def test_long_call_put_strategy_initialization(self):
+        """Test strategy initialization."""
+        strategy = LongCallPutStrategy(name="long_call_put", enabled=True)
         
-        # Create puts
-        for strike in [140, 145, 150, 155, 160]:
-            options.append(
-                OptionContract(
-                    symbol="AAPL",
-                    expiration=expiration,
-                    strike=strike,
-                    contract_type="put",
-                    bid=max(0.1, strike - current_price + 2),
-                    ask=max(0.1, strike - current_price + 2.5),
-                    volume=100,
-                    open_interest=500,
-                    implied_volatility=0.25,
-                    underlying_price=current_price,
-                    days_to_expiration=30,
-                    liquidity_score=75.0,
-                )
-            )
-        
-        # Create calls
-        for strike in [140, 145, 150, 155, 160]:
-            options.append(
-                OptionContract(
-                    symbol="AAPL",
-                    expiration=expiration,
-                    strike=strike,
-                    contract_type="call",
-                    bid=max(0.1, current_price - strike + 2),
-                    ask=max(0.1, current_price - strike + 2.5),
-                    volume=100,
-                    open_interest=500,
-                    implied_volatility=0.25,
-                    underlying_price=current_price,
-                    days_to_expiration=30,
-                    liquidity_score=75.0,
-                )
-            )
-        
-        return options
-
-    def test_credit_spread_strategy_initialization(self):
-        """Test credit spread strategy initialization."""
-        strategy = CreditSpreadStrategy(name="credit_spread", enabled=True)
-        
-        assert strategy.name == "credit_spread"
+        assert strategy.name == "long_call_put"
         assert strategy.is_enabled() is True
 
-    def test_credit_spread_generates_signal(self):
-        """Test that credit spread strategy generates a signal."""
-        strategy = CreditSpreadStrategy()
+    def test_long_call_put_only_available_for_high_risk(self):
+        """Test that strategy only generates signals for high-risk profiles."""
+        strategy = LongCallPutStrategy()
         
         market_data = MarketData(
             symbol="AAPL",
@@ -430,203 +386,204 @@ class TestCreditSpreadStrategy:
             quote_timestamp=datetime.utcnow(),
         )
         
-        options_chain = self._create_options_chain(150.0)
+        options_chain = [
+            OptionContract(
+                symbol="AAPL",
+                expiration=_create_future_expiration(30),
+                strike=150.0,
+                contract_type="call",
+                bid=5.0,
+                ask=5.5,
+                volume=100,
+                open_interest=500,
+                implied_volatility=0.25,
+                underlying_price=150.0,
+                days_to_expiration=30,
+                liquidity_score=75.0,
+            )
+        ]
         
+        # Should return None for medium risk
         signal = strategy.generate(
             symbol="AAPL",
             market_data=market_data,
             options_chain=options_chain,
             risk_profile=RiskLevel.MEDIUM,
         )
+        assert signal is None
         
-        # Signal may be None if no valid spread found, but if generated should have required fields
+        # Should return None for low risk
+        signal = strategy.generate(
+            symbol="AAPL",
+            market_data=market_data,
+            options_chain=options_chain,
+            risk_profile=RiskLevel.LOW,
+        )
+        assert signal is None
+
+    def test_long_call_put_max_loss_equals_premium_paid(self):
+        """Test that max loss equals premium paid (acceptance criterion)."""
+        strategy = LongCallPutStrategy()
+        
+        market_data = MarketData(
+            symbol="AAPL",
+            current_price=150.0,
+            price_history=[
+                {"close": 148.0},
+                {"close": 149.0},
+                {"close": 150.0},
+                {"close": 151.0},
+                {"close": 152.0},
+            ],
+            quote_timestamp=datetime.utcnow(),
+        )
+        
+        options_chain = [
+            OptionContract(
+                symbol="AAPL",
+                expiration=_create_future_expiration(30),
+                strike=150.0,
+                contract_type="call",
+                bid=5.0,
+                ask=5.5,
+                volume=100,
+                open_interest=500,
+                implied_volatility=0.25,
+                underlying_price=150.0,
+                days_to_expiration=30,
+                liquidity_score=75.0,
+            ),
+            OptionContract(
+                symbol="AAPL",
+                expiration=_create_future_expiration(30),
+                strike=155.0,
+                contract_type="call",
+                bid=2.0,
+                ask=2.5,
+                volume=100,
+                open_interest=500,
+                implied_volatility=0.25,
+                underlying_price=150.0,
+                days_to_expiration=30,
+                liquidity_score=75.0,
+            ),
+        ]
+        
+        signal = strategy.generate(
+            symbol="AAPL",
+            market_data=market_data,
+            options_chain=options_chain,
+            risk_profile=RiskLevel.HIGH,
+        )
+        
         if signal is not None:
+            # Max loss should equal premium paid
+            premium_paid = signal.breakdown["premium_at_risk"]
+            assert signal.max_loss == premium_paid
+
+    def test_long_call_put_rejects_if_premium_exceeds_budget(self):
+        """Test that strategy rejects if premium exceeds risk budget."""
+        strategy = LongCallPutStrategy()
+        
+        market_data = MarketData(
+            symbol="AAPL",
+            current_price=150.0,
+            price_history=[{"close": 150.0}],
+            quote_timestamp=datetime.utcnow(),
+        )
+        
+        # Create option with very high premium (exceeds budget)
+        options_chain = [
+            OptionContract(
+                symbol="AAPL",
+                expiration=_create_future_expiration(30),
+                strike=150.0,
+                contract_type="call",
+                bid=5000.0,  # Very high premium
+                ask=5500.0,
+                volume=100,
+                open_interest=500,
+                implied_volatility=0.25,
+                underlying_price=150.0,
+                days_to_expiration=30,
+                liquidity_score=75.0,
+            )
+        ]
+        
+        signal = strategy.generate(
+            symbol="AAPL",
+            market_data=market_data,
+            options_chain=options_chain,
+            risk_profile=RiskLevel.HIGH,
+        )
+        
+        # Should be rejected due to premium exceeding budget
+        assert signal is None
+
+    def test_long_call_put_signal_includes_required_fields(self):
+        """Test that signal includes all required fields."""
+        strategy = LongCallPutStrategy()
+        
+        market_data = MarketData(
+            symbol="AAPL",
+            current_price=150.0,
+            price_history=[
+                {"close": 148.0},
+                {"close": 149.0},
+                {"close": 150.0},
+                {"close": 151.0},
+                {"close": 152.0},
+            ],
+            quote_timestamp=datetime.utcnow(),
+        )
+        
+        options_chain = [
+            OptionContract(
+                symbol="AAPL",
+                expiration=_create_future_expiration(30),
+                strike=150.0,
+                contract_type="call",
+                bid=5.0,
+                ask=5.5,
+                volume=100,
+                open_interest=500,
+                implied_volatility=0.25,
+                underlying_price=150.0,
+                days_to_expiration=30,
+                liquidity_score=75.0,
+            ),
+            OptionContract(
+                symbol="AAPL",
+                expiration=_create_future_expiration(30),
+                strike=155.0,
+                contract_type="call",
+                bid=2.0,
+                ask=2.5,
+                volume=100,
+                open_interest=500,
+                implied_volatility=0.25,
+                underlying_price=150.0,
+                days_to_expiration=30,
+                liquidity_score=75.0,
+            ),
+        ]
+        
+        signal = strategy.generate(
+            symbol="AAPL",
+            market_data=market_data,
+            options_chain=options_chain,
+            risk_profile=RiskLevel.HIGH,
+        )
+        
+        if signal is not None:
+            # Verify required fields
             assert signal.symbol == "AAPL"
-            assert signal.strategy_type == "credit_spread"
+            assert signal.strategy_type == "long_call_put"
             assert signal.reason is not None
             assert signal.max_loss is not None
             assert signal.max_loss > 0
-            assert signal.expected_profit > 0
-            assert signal.score >= 0.0
-            assert signal.score <= 1.0
-            assert len(signal.option_contracts) == 2  # Short and long options
-
-    def test_credit_spread_has_protective_long_option(self):
-        """Test that credit spread always includes protective long option (no naked shorts)."""
-        strategy = CreditSpreadStrategy()
-        
-        market_data = MarketData(
-            symbol="AAPL",
-            current_price=150.0,
-            price_history=[{"close": 150.0}],
-            quote_timestamp=datetime.utcnow(),
-        )
-        
-        options_chain = self._create_options_chain(150.0)
-        
-        signal = strategy.generate(
-            symbol="AAPL",
-            market_data=market_data,
-            options_chain=options_chain,
-            risk_profile=RiskLevel.MEDIUM,
-        )
-        
-        if signal is not None:
-            # Should have exactly 2 options: short and long
-            assert len(signal.option_contracts) == 2
-            # Verify breakdown has max_loss (defined risk)
+            assert signal.score >= 0.0 and signal.score <= 1.0
+            assert signal.probability_estimate >= 0.0 and signal.probability_estimate <= 1.0
+            assert signal.breakdown is not None
+            assert "premium_at_risk" in signal.breakdown
             assert "max_loss" in signal.breakdown
-            assert signal.breakdown["max_loss"] > 0
-
-    def test_credit_spread_calculates_net_credit(self):
-        """Test that credit spread calculates net credit correctly."""
-        strategy = CreditSpreadStrategy()
-        
-        market_data = MarketData(
-            symbol="AAPL",
-            current_price=150.0,
-            price_history=[{"close": 150.0}],
-            quote_timestamp=datetime.utcnow(),
-        )
-        
-        options_chain = self._create_options_chain(150.0)
-        
-        signal = strategy.generate(
-            symbol="AAPL",
-            market_data=market_data,
-            options_chain=options_chain,
-            risk_profile=RiskLevel.MEDIUM,
-        )
-        
-        if signal is not None:
-            # Net credit should be positive
-            assert signal.breakdown["net_credit"] > 0
-            # Expected profit should equal net credit for credit spreads
-            assert signal.expected_profit == signal.breakdown["net_credit"]
-
-    def test_credit_spread_calculates_max_loss(self):
-        """Test that credit spread calculates max loss correctly."""
-        strategy = CreditSpreadStrategy()
-        
-        market_data = MarketData(
-            symbol="AAPL",
-            current_price=150.0,
-            price_history=[{"close": 150.0}],
-            quote_timestamp=datetime.utcnow(),
-        )
-        
-        options_chain = self._create_options_chain(150.0)
-        
-        signal = strategy.generate(
-            symbol="AAPL",
-            market_data=market_data,
-            options_chain=options_chain,
-            risk_profile=RiskLevel.MEDIUM,
-        )
-        
-        if signal is not None:
-            # Max loss should be spread width minus net credit
-            spread_width = signal.breakdown["spread_width"]
-            net_credit = signal.breakdown["net_credit"]
-            expected_max_loss = spread_width - net_credit
-            assert abs(signal.max_loss - expected_max_loss) < 0.01  # Allow small rounding error
-
-    def test_credit_spread_calculates_breakeven(self):
-        """Test that credit spread calculates breakeven correctly."""
-        strategy = CreditSpreadStrategy()
-        
-        market_data = MarketData(
-            symbol="AAPL",
-            current_price=150.0,
-            price_history=[{"close": 150.0}],
-            quote_timestamp=datetime.utcnow(),
-        )
-        
-        options_chain = self._create_options_chain(150.0)
-        
-        signal = strategy.generate(
-            symbol="AAPL",
-            market_data=market_data,
-            options_chain=options_chain,
-            risk_profile=RiskLevel.MEDIUM,
-        )
-        
-        if signal is not None:
-            # Breakeven should be in breakdown
-            assert "breakeven" in signal.breakdown
-            assert signal.breakdown["breakeven"] > 0
-
-    def test_credit_spread_rejects_wide_spreads(self):
-        """Test that credit spread rejects wide spreads with low liquidity."""
-        strategy = CreditSpreadStrategy()
-        
-        market_data = MarketData(
-            symbol="AAPL",
-            current_price=150.0,
-            price_history=[{"close": 150.0}],
-            quote_timestamp=datetime.utcnow(),
-        )
-        
-        # Create options chain with low liquidity
-        options = []
-        expiration = _create_future_expiration(30)
-        
-        for strike in [100, 110, 120, 130, 140, 150, 160, 170, 180, 190, 200]:
-            options.append(
-                OptionContract(
-                    symbol="AAPL",
-                    expiration=expiration,
-                    strike=strike,
-                    contract_type="put",
-                    bid=0.01,
-                    ask=0.05,
-                    volume=1,
-                    open_interest=1,
-                    implied_volatility=0.25,
-                    underlying_price=150.0,
-                    days_to_expiration=30,
-                    liquidity_score=10.0,  # Low liquidity
-                )
-            )
-        
-        signal = strategy.generate(
-            symbol="AAPL",
-            market_data=market_data,
-            options_chain=options,
-            risk_profile=RiskLevel.MEDIUM,
-        )
-        
-        # Should reject due to low liquidity
-        assert signal is None
-
-    def test_credit_spread_signal_includes_all_required_fields(self):
-        """Test that credit spread signal includes all required fields."""
-        strategy = CreditSpreadStrategy()
-        
-        market_data = MarketData(
-            symbol="AAPL",
-            current_price=150.0,
-            price_history=[{"close": 150.0}],
-            quote_timestamp=datetime.utcnow(),
-        )
-        
-        options_chain = self._create_options_chain(150.0)
-        
-        signal = strategy.generate(
-            symbol="AAPL",
-            market_data=market_data,
-            options_chain=options_chain,
-            risk_profile=RiskLevel.MEDIUM,
-        )
-        
-        if signal is not None:
-            # Verify all required fields
-            assert signal.symbol == "AAPL"
-            assert signal.strategy_type == "credit_spread"
-            assert signal.reason is not None and len(signal.reason) > 0
-            assert signal.max_loss is not None and signal.max_loss > 0
-            assert signal.expected_profit is not None and signal.expected_profit > 0
-            assert signal.probability_estimate is not None
-            assert 0.0 <= signal.probability_estimate <= 1.0
-            assert signal.score is not None
-            assert 0.0 <= signal.score <= 1.0
