@@ -135,7 +135,13 @@ class OptionContract(Base):
 
 
 class NewsArticle(Base):
-    """News article model."""
+    """News article model with sentiment analysis.
+    
+    Stores news articles with sentiment metadata including:
+    - sentiment: Provider sentiment if available ("positive", "negative", "neutral")
+    - sentiment_score: Normalized sentiment score (-1.0 to 1.0, where -1 is bearish, 0 is neutral, 1 is bullish)
+    - confidence_score: Confidence in sentiment analysis (0.0 to 1.0)
+    """
 
     __tablename__ = "news_articles"
 
@@ -146,7 +152,9 @@ class NewsArticle(Base):
     url = Column(String(2048), nullable=True, unique=True, index=True)  # URL is unique to prevent duplicates
     source = Column(String(255), nullable=True)
     published_at = Column(DateTime, nullable=True, index=True)
-    sentiment = Column(String(20), nullable=True)  # "positive", "negative", "neutral"
+    sentiment = Column(String(20), nullable=True)  # "positive", "negative", "neutral" (from provider)
+    sentiment_score = Column(Float, nullable=True)  # Normalized score: -1.0 (bearish) to 1.0 (bullish)
+    confidence_score = Column(Float, nullable=True)  # Confidence in sentiment: 0.0 to 1.0
     fetched_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
     provider = Column(String(50), nullable=False)  # "finnhub", "alpha_vantage", "yfinance", etc.
 
@@ -249,8 +257,7 @@ class BacktestResult(Base):
     losing_trades = Column(Integer, nullable=False)
     win_rate = Column(Float, nullable=False)
     max_drawdown_pct = Column(Float, nullable=False)
-    sharpe_ratio = Column(Float, nullable=True)
-    parameters = Column(Text, nullable=True)  # JSON str
+    sharpe_ratio = Column(Float, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 

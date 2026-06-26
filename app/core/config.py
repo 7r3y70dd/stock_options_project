@@ -80,6 +80,12 @@ class Config:
         os.getenv("FINNHUB_CACHE_TTL_SECONDS", "300")
     )
 
+    # Sentiment Analysis Configuration
+    SENTIMENT_ANALYSIS_ENABLED: bool = os.getenv("SENTIMENT_ANALYSIS_ENABLED", "True").lower() == "true"
+    SENTIMENT_MODEL: str = os.getenv("SENTIMENT_MODEL", "finbert")  # "finbert" or "distilbert"
+    SENTIMENT_BATCH_SIZE: int = int(os.getenv("SENTIMENT_BATCH_SIZE", "32"))
+    SENTIMENT_USE_GPU: bool = os.getenv("SENTIMENT_USE_GPU", "False").lower() == "true"
+
     # Paper Trading & Broker Configuration
     PAPER_TRADING_ENABLED: bool = os.getenv("PAPER_TRADING_ENABLED", "True").lower() == "true"
     LIVE_TRADING_ENABLED: bool = os.getenv("LIVE_TRADING_ENABLED", "False").lower() == "true"
