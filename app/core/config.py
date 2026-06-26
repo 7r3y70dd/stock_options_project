@@ -135,6 +135,18 @@ class Config:
     DEBIT_SPREAD_MAX_DEBIT: float = float(os.getenv("DEBIT_SPREAD_MAX_DEBIT", "500.0"))
     DEBIT_SPREAD_MIN_REWARD_RISK_RATIO: float = float(os.getenv("DEBIT_SPREAD_MIN_REWARD_RISK_RATIO", "0.5"))
 
+    # Credit Spread Strategy Configuration
+    CREDIT_SPREAD_MIN_DTE: int = int(os.getenv("CREDIT_SPREAD_MIN_DTE", "7"))
+    CREDIT_SPREAD_MAX_DTE: int = int(os.getenv("CREDIT_SPREAD_MAX_DTE", "60"))
+    CREDIT_SPREAD_MIN_VOLUME: int = int(os.getenv("CREDIT_SPREAD_MIN_VOLUME", "10"))
+    CREDIT_SPREAD_MIN_OPEN_INTEREST: int = int(os.getenv("CREDIT_SPREAD_MIN_OPEN_INTEREST", "20"))
+    CREDIT_SPREAD_MIN_LIQUIDITY_SCORE: float = float(os.getenv("CREDIT_SPREAD_MIN_LIQUIDITY_SCORE", "50.0"))
+    CREDIT_SPREAD_SHORT_OTM_THRESHOLD: float = float(os.getenv("CREDIT_SPREAD_SHORT_OTM_THRESHOLD", "0.05"))
+    CREDIT_SPREAD_LONG_OTM_THRESHOLD: float = float(os.getenv("CREDIT_SPREAD_LONG_OTM_THRESHOLD", "0.15"))
+    CREDIT_SPREAD_MAX_WIDTH: float = float(os.getenv("CREDIT_SPREAD_MAX_WIDTH", "500.0"))
+    CREDIT_SPREAD_MIN_CREDIT: float = float(os.getenv("CREDIT_SPREAD_MIN_CREDIT", "0.10"))
+    CREDIT_SPREAD_MIN_RETURN_ON_RISK: float = float(os.getenv("CREDIT_SPREAD_MIN_RETURN_ON_RISK", "0.20"))
+
     # Logging
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
 
