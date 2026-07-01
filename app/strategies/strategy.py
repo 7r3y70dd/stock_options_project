@@ -32,11 +32,19 @@ class NewsContext:
 
 @dataclass
 class StrategySignal:
-    """Output from a strategy - becomes a Signal candidate."""
+    """Output from a strategy - becomes a Signal candidate.
+    
+    The score is on a 0-100 scale where:
+    - 0-20: Poor signal, low confidence
+    - 20-40: Below average signal
+    - 40-60: Average signal
+    - 60-80: Good signal, above average
+    - 80-100: Excellent signal, high confidence
+    """
     symbol: str
     strategy_type: str  # Name of the strategy that generated this
     risk_level: RiskLevel
-    score: float  # 0.0 to 1.0
+    score: float  # 0.0 to 100.0 (0-100 scale)
     expected_profit: float  # In dollars
     max_loss: float  # In dollars (required)
     probability_estimate: float  # 0.0 to 1.0
@@ -86,8 +94,9 @@ class Strategy(ABC):
             Every signal must include:
             - reason: Explanation of the signal
             - max_loss: Maximum loss estimate in dollars
-            - score: Confidence score 0.0-1.0
+            - score: Confidence score 0.0-100.0
             - expected_profit: Expected profit in dollars
+            - breakdown: Dict with component scores for explainability
         """
         pass
 
