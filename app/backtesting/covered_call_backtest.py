@@ -5,13 +5,13 @@ Demonstrates how to test options strategies with historical data.
 """
 
 import logging
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple, List
 
 import pandas as pd
 import numpy as np
 
 from app.backtesting.strategy_backtester import StrategyBacktester
-from app.backtesting.engine import BacktestEngine, BacktestResult
+from app.backtesting.engine import BacktestEngine, BacktestResult, SimulatedTrade
 
 logger = logging.getLogger(__name__)
 
@@ -150,3 +150,48 @@ class CoveredCallBacktester(StrategyBacktester):
         )
         
         return result
+
+    def replay_with_options(
+        self,
+        symbol: str,
+        price_data: pd.DataFrame,
+        option_data: Optional[pd.DataFrame] = None,
+        **kwargs,
+    ) -> Tuple[BacktestResult, List[SimulatedTrade]]:
+        """Replay historical signals with option premium modeling.
+        
+        Args:
+            symbol: Stock symbol
+            price_data: DataFrame with OHLCV data
+            option_data: DataFrame with option prices (optional)
+            **kwargs: Strategy-specific parameters
+            
+        Returns:
+            Tuple of (BacktestResult, List[SimulatedTrade])
+        """
+        # Adjust price data for option premium if provided
+        if option_data is not None:
+            adjusted_close = price_data["close"].copy()
+            in_position = False
+            
+            for i in range(len(price_data)):
+                # Check if we should be in position based on SMA
+                if i >= self.SMA_PERIOD:
+                    sma = pd.Series(price_data["close"].iloc[:i+1]).rolling(window=self.SMA_PERIOD).mean().iloc[-1]
+                    if not in_position and price_data["close"].iloc[i] > sma:
+                        in_position = True
+                    elif in_position and price_data["close"].iloc[i] < sma:
+                        in_position = False
+                
+                # Add premium income while holding
+                if in_position and i > 0:
+                    premium = adjusted_close.iloc[i] * self.PREMIUM_PCT
+                    adjusted_close.iloc[i] += premium
+            
+            # Create adjusted price data
+            adjusted_price_data = price_data.copy()
+            adjusted_price_data["close"] = adjusted_close
+            price_data = adjusted_price_data
+        
+        # Replay with adjusted data
+        return self.replay_historical_signals(symbol, price_data, **kwargs)

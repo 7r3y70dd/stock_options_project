@@ -95,6 +95,46 @@ class BacktestResult:
         )
 
 
+@dataclass
+class SimulatedTrade:
+    """A single simulated trade from historical replay.
+    
+    Attributes:
+        entry_date: Date when trade was entered
+        entry_price: Price at entry
+        exit_date: Date when trade was exited (None if still open)
+        exit_price: Price at exit (None if still open)
+        quantity: Number of shares/contracts
+        pnl: Realized P&L (None if still open)
+        pnl_pct: P&L as percentage (None if still open)
+        reason: Reason for entry (from signal)
+        signal_score: Score of the signal that triggered entry
+    """
+    entry_date: datetime
+    entry_price: float
+    exit_date: Optional[datetime]
+    exit_price: Optional[float]
+    quantity: int
+    pnl: Optional[float]
+    pnl_pct: Optional[float]
+    reason: str
+    signal_score: float
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary."""
+        return {
+            "entry_date": self.entry_date.isoformat(),
+            "entry_price": self.entry_price,
+            "exit_date": self.exit_date.isoformat() if self.exit_date else None,
+            "exit_price": self.exit_price,
+            "quantity": self.quantity,
+            "pnl": self.pnl,
+            "pnl_pct": self.pnl_pct,
+            "reason": self.reason,
+            "signal_score": self.signal_score,
+        }
+
+
 class BacktestEngine:
     """Vectorized backtesting engine using VectorBT.
     
@@ -103,6 +143,7 @@ class BacktestEngine:
     - Detailed performance metrics and risk analysis
     - Trade-level analysis and equity curve tracking
     - Vectorized operations for speed
+    - Historical signal replay with look-ahead bias prevention
     
     Limitations for options backtesting:
     - Does not model option Greeks (delta, gamma, theta, vega)
@@ -238,3 +279,117 @@ class BacktestEngine:
 
         logger.info(f"Backtest completed: {result}")
         return result
+
+    def replay_signals_day_by_day(
+        self,
+        symbol: str,
+        price_data: pd.DataFrame,
+        signal_generator_fn,
+        strategy_name: str = "strategy",
+    ) -> Tuple[BacktestResult, List[SimulatedTrade]]:
+        """Replay historical signals day-by-day to avoid look-ahead bias.
+        
+        This method simulates signal generation as if the strategy were running
+        in real-time, using only data available up to each day. This prevents
+        look-ahead bias where future data would influence past decisions.
+        
+        Args:
+            symbol: Stock symbol
+            price_data: DataFrame with OHLCV data (index=date, columns=[open, high, low, close, volume])
+            signal_generator_fn: Callable that takes (symbol, price_data_up_to_date) and returns signal (1, -1, or 0)
+            strategy_name: Name of strategy being tested
+            
+        Returns:
+            Tuple of (BacktestResult, List[SimulatedTrade])
+            
+        Raises:
+            ValueError: If price_data is invalid
+        """
+        if price_data.empty:
+            raise ValueError("price_data cannot be empty")
+        
+        # Initialize tracking
+        signals = []
+        simulated_trades: List[SimulatedTrade] = []
+        current_position = None  # Track open position
+        portfolio_value = self.initial_cash
+        equity_values = []
+        
+        # Replay day by day
+        for i in range(len(price_data)):
+            # Get data up to current day (no look-ahead)
+            current_date = price_data.index[i]
+            price_data_up_to_date = price_data.iloc[:i+1]
+            
+            # Generate signal using only available data
+            try:
+                signal = signal_generator_fn(symbol, price_data_up_to_date)
+            except Exception as e:
+                logger.warning(f"Error generating signal on {current_date}: {e}")
+                signal = 0
+            
+            signals.append(signal)
+            current_price = price_data["close"].iloc[i]
+            
+            # Process signal
+            if signal == 1 and current_position is None:
+                # Entry signal
+                current_position = {
+                    "entry_date": current_date,
+                    "entry_price": current_price,
+                    "quantity": 1,
+                    "reason": "Signal generated",
+                    "signal_score": 0.0,  # Would be populated from actual signal
+                }
+            elif signal == -1 and current_position is not None:
+                # Exit signal
+                exit_price = current_price
+                pnl = (exit_price - current_position["entry_price"]) * current_position["quantity"]
+                pnl_pct = (exit_price - current_position["entry_price"]) / current_position["entry_price"]
+                
+                trade = SimulatedTrade(
+                    entry_date=current_position["entry_date"],
+                    entry_price=current_position["entry_price"],
+                    exit_date=current_date,
+                    exit_price=exit_price,
+                    quantity=current_position["quantity"],
+                    pnl=pnl,
+                    pnl_pct=pnl_pct,
+                    reason=current_position["reason"],
+                    signal_score=current_position["signal_score"],
+                )
+                simulated_trades.append(trade)
+                
+                # Update portfolio value
+                portfolio_value += pnl
+                current_position = None
+            
+            # Track equity
+            if current_position is not None:
+                # Unrealized P&L
+                unrealized_pnl = (current_price - current_position["entry_price"]) * current_position["quantity"]
+                equity_values.append(portfolio_value + unrealized_pnl)
+            else:
+                equity_values.append(portfolio_value)
+        
+        # Convert signals to DataFrame
+        signals_df = pd.DataFrame(
+            signals,
+            index=price_data.index,
+            columns=["signal"],
+        )["signal"]
+        
+        # Run standard backtest for metrics
+        result = self.backtest(
+            symbol=symbol,
+            price_data=price_data,
+            signals=signals_df,
+            strategy_name=strategy_name,
+        )
+        
+        logger.info(
+            f"Historical signal replay completed: {len(simulated_trades)} trades, "
+            f"final portfolio value: ${portfolio_value:,.2f}"
+        )
+        
+        return result, simulated_trades
