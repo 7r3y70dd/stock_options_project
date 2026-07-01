@@ -92,7 +92,8 @@ class OptionContract(Base):
     Stores option contract data including Greeks (delta, gamma, theta, vega),
     market data (bid, ask, volume, open_interest), volatility metrics
     (implied volatility, historical volatility, and volatility context),
-    and theoretical pricing (theoretical_price, pricing_difference).
+    theoretical pricing (theoretical_price, pricing_difference),
+    and event risk information.
     """
 
     __tablename__ = "option_contracts"
@@ -122,6 +123,7 @@ class OptionContract(Base):
     pricing_difference = Column(Float, nullable=True)  # Market mid-price minus theoretical price
     pricing_assessment = Column(String(50), nullable=True)  # "overpriced", "underpriced", "fair"
     liquidity_score = Column(Float, nullable=True, default=0.0)  # Liquidity score 0-100
+    event_risks = Column(Text, nullable=True)  # JSON string of detected event risks
     last_updated = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
     # Relationships
@@ -135,12 +137,13 @@ class OptionContract(Base):
 
 
 class NewsArticle(Base):
-    """News article model with sentiment analysis.
+    """News article model with sentiment analysis and event classification.
     
     Stores news articles with sentiment metadata including:
     - sentiment: Provider sentiment if available ("positive", "negative", "neutral")
     - sentiment_score: Normalized sentiment score (-1.0 to 1.0, where -1 is bearish, 0 is neutral, 1 is bullish)
     - confidence_score: Confidence in sentiment analysis (0.0 to 1.0)
+    - event_type: Type of event detected (earnings, fda_decision, lawsuit, m_and_a, sec_investigation, analyst_upgrade, analyst_downgrade, macro_event)
     """
 
     __tablename__ = "news_articles"
@@ -155,6 +158,7 @@ class NewsArticle(Base):
     sentiment = Column(String(20), nullable=True)  # "positive", "negative", "neutral" (from provider)
     sentiment_score = Column(Float, nullable=True)  # Normalized score: -1.0 (bearish) to 1.0 (bullish)
     confidence_score = Column(Float, nullable=True)  # Confidence in sentiment: 0.0 to 1.0
+    event_type = Column(String(50), nullable=True)  # Type of event: earnings, fda_decision, lawsuit, m_and_a, sec_investigation, analyst_upgrade, analyst_downgrade, macro_event
     fetched_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
     provider = Column(String(50), nullable=False)  # "finnhub", "alpha_vantage", "yfinance", etc.
 
@@ -168,8 +172,9 @@ class Signal(Base):
     """Trading signal model for storing generated trade ideas.
     
     Stores trading signals with comprehensive analysis including risk assessment,
-    profit/loss estimates, strategy information, volatility context, and Greeks analysis.
-    Every signal includes an explanation (reason) and max-loss estimate as required.
+    profit/loss estimates, strategy information, volatility context, Greeks analysis,
+    and event-risk information. Every signal includes an explanation (reason) and 
+    max-loss estimate as required.
     """
 
     __tablename__ = "signals"
@@ -187,6 +192,7 @@ class Signal(Base):
     status = Column(String(50), default="pending", nullable=False, index=True)  # pending, approved, rejected, expired, executed
     option_contract_id = Column(Integer, ForeignKey("option_contracts.id"), nullable=True, index=True)  # Optional: linked contract
     breakdown = Column(Text, nullable=True)  # JSON string of factor scores and Greeks summary
+    event_risks = Column(Text, nullable=True)  # JSON string of detected event risks
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
@@ -247,19 +253,19 @@ class BacktestResult(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     strategy_name = Column(String(255), nullable=False)
     symbol = Column(String(20), nullable=False, index=True)
-    start_date = Column(String(10), nullable=False)  # YYYY-MM-DD
-    end_date = Column(String(10), nullable=False)  # YYYY-MM-DD
+    start_date = Column(DateTime, nullable=False)
+    end_date = Column(DateTime, nullable=False)
     initial_capital = Column(Float, nullable=False)
-    final_capital = Column(Float, nullable=False)
-    total_return_pct = Column(Float, nullable=False)
+    final_value = Column(Float, nullable=False)
+    total_return = Column(Float, nullable=False)  # Percentage return
     total_trades = Column(Integer, nullable=False)
     winning_trades = Column(Integer, nullable=False)
     losing_trades = Column(Integer, nullable=False)
-    win_rate = Column(Float, nullable=False)
-    max_drawdown_pct = Column(Float, nullable=False)
-    sharpe_ratio = Column(Float, nullable=False)
+    win_rate = Column(Float, nullable=False)  # Percentage
+    max_drawdown = Column(Float, nullable=False)  # Percentage
+    sharpe_ratio = Column(Float, nullable=True)
+    sortino_ratio = Column(Float, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
     # Relationships
     user = relationship("User", back_populates="backtest_results")
