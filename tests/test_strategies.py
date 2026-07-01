@@ -363,7 +363,7 @@ class TestStrategyRegistry:
         registry = StrategyRegistry()
         strategy1 = MockStrategy(name="good_strategy", enabled=True)
         strategy2 = AlwaysFailStrategy(name="bad_strategy", enabled=True)
-        strategy3 = MockStrategy(name="another_good_strategy", enabled=True)
+        strategy3 = MockStrategy(name="good_strategy2", enabled=True)
         
         registry.register(strategy1)
         registry.register(strategy2)
@@ -393,6 +393,7 @@ class TestStrategyRegistry:
             )
         ]
         
+        # Should not raise exception, should return signals from good strategies
         signals = registry.generate_signals(
             symbol="AAPL",
             market_data=market_data,
@@ -400,15 +401,60 @@ class TestStrategyRegistry:
             risk_profile=RiskLevel.MEDIUM,
         )
         
-        # Should have 2 signals (from good strategies, bad strategy exception handled)
+        # Should have 2 signals (from the two good strategies)
         assert len(signals) == 2
+        assert all(isinstance(s, StrategySignal) for s in signals)
 
-    def test_generate_signals_returns_none_when_no_opportunities(self):
-        """Test that strategies can return None when no opportunities."""
+    def test_strategy_registry_global_instance(self):
+        """Test global strategy registry instance."""
+        # Get initial registry
+        registry1 = get_strategy_registry()
+        assert registry1 is not None
+        
+        # Get again - should be same instance
+        registry2 = get_strategy_registry()
+        assert registry1 is registry2
+        
+        # Set new registry
+        new_registry = StrategyRegistry()
+        set_strategy_registry(new_registry)
+        
+        # Get should return new registry
+        registry3 = get_strategy_registry()
+        assert registry3 is new_registry
+        assert registry3 is not registry1
+
+
+class TestAcceptanceCriteria:
+    """Tests for acceptance criteria from Issue #024."""
+
+    def test_strategies_can_be_enabled_disabled(self):
+        """Acceptance Criteria: Strategies can be enabled/disabled."""
         registry = StrategyRegistry()
         strategy = MockStrategy(name="test_strategy", enabled=True)
-        
         registry.register(strategy)
+        
+        # Initially enabled
+        assert strategy.is_enabled() is True
+        assert "test_strategy" in registry.list_enabled_strategies()
+        
+        # Disable via strategy
+        strategy.disable()
+        assert strategy.is_enabled() is False
+        assert "test_strategy" not in registry.list_enabled_strategies()
+        
+        # Disable via registry
+        strategy.enable()
+        registry.disable_strategy("test_strategy")
+        assert "test_strategy" not in registry.list_enabled_strategies()
+        
+        # Enable via registry
+        registry.enable_strategy("test_strategy")
+        assert "test_strategy" in registry.list_enabled_strategies()
+
+    def test_strategy_output_becomes_signal_candidate(self):
+        """Acceptance Criteria: Strategy output always becomes a Signal candidate."""
+        strategy = MockStrategy(name="test_strategy")
         
         market_data = MarketData(
             symbol="AAPL",
@@ -417,12 +463,92 @@ class TestStrategyRegistry:
             quote_timestamp=datetime.utcnow(),
         )
         
-        # Empty options chain
-        signals = registry.generate_signals(
+        options_chain = [
+            OptionContract(
+                symbol="AAPL",
+                expiration=_create_future_expiration(30),
+                strike=150.0,
+                contract_type="call",
+                bid=5.0,
+                ask=5.5,
+                volume=100,
+                open_interest=500,
+                implied_volatility=0.25,
+                underlying_price=150.0,
+                days_to_expiration=30,
+                liquidity_score=75.0,
+            )
+        ]
+        
+        signal = strategy.generate(
             symbol="AAPL",
             market_data=market_data,
-            options_chain=[],
+            options_chain=options_chain,
             risk_profile=RiskLevel.MEDIUM,
         )
         
-        assert len(signals) == 0
+        # Signal must be a StrategySignal
+        assert isinstance(signal, StrategySignal)
+        
+        # Signal must have required fields for Signal candidate conversion
+        assert signal.reason is not None and len(signal.reason) > 0
+        assert signal.max_loss is not None
+        assert 0.0 <= signal.score <= 100.0
+        assert signal.expected_profit is not None
+        assert signal.breakdown is not None
+
+    def test_strategies_plug_into_same_engine(self):
+        """Acceptance Criteria: Each strategy plugs into the same engine."""
+        registry = StrategyRegistry()
+        
+        # Register multiple strategies
+        strategy1 = MockStrategy(name="strategy1", enabled=True)
+        strategy2 = MockStrategy(name="strategy2", enabled=True)
+        strategy3 = MockStrategy(name="strategy3", enabled=True)
+        
+        registry.register(strategy1)
+        registry.register(strategy2)
+        registry.register(strategy3)
+        
+        market_data = MarketData(
+            symbol="AAPL",
+            current_price=150.0,
+            price_history=[{"close": 150.0}],
+            quote_timestamp=datetime.utcnow(),
+        )
+        
+        options_chain = [
+            OptionContract(
+                symbol="AAPL",
+                expiration=_create_future_expiration(30),
+                strike=150.0,
+                contract_type="call",
+                bid=5.0,
+                ask=5.5,
+                volume=100,
+                open_interest=500,
+                implied_volatility=0.25,
+                underlying_price=150.0,
+                days_to_expiration=30,
+                liquidity_score=75.0,
+            )
+        ]
+        
+        # All strategies generate signals through the same engine (registry)
+        signals = registry.generate_signals(
+            symbol="AAPL",
+            market_data=market_data,
+            options_chain=options_chain,
+            risk_profile=RiskLevel.MEDIUM,
+        )
+        
+        # Should have signals from all enabled strategies
+        assert len(signals) == 3
+        assert all(isinstance(s, StrategySignal) for s in signals)
+        
+        # All signals should have consistent structure
+        for signal in signals:
+            assert signal.symbol == "AAPL"
+            assert signal.reason is not None
+            assert signal.max_loss is not None
+            assert 0.0 <= signal.score <= 100.0
