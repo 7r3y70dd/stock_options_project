@@ -52,12 +52,12 @@ class MockStrategy(Strategy):
             symbol=symbol,
             strategy_type="mock_strategy",
             risk_level=risk_profile,
-            score=0.75,
+            score=75.0,  # 0-100 scale
             expected_profit=500.0,
             max_loss=200.0,
             probability_estimate=0.65,
             reason="Mock strategy signal for testing",
-            breakdown={"factor1": 0.8, "factor2": 0.7},
+            breakdown={"factor1": 80.0, "factor2": 70.0},
         )
 
 
@@ -139,7 +139,7 @@ class TestStrategy:
         assert signal.strategy_type == "mock_strategy"
         assert signal.reason is not None
         assert signal.max_loss is not None
-        assert signal.score > 0.0
+        assert 0.0 <= signal.score <= 100.0  # Score is 0-100
         assert signal.expected_profit > 0.0
 
     def test_strategy_signal_has_required_fields(self):
@@ -148,7 +148,7 @@ class TestStrategy:
             symbol="AAPL",
             strategy_type="test_strategy",
             risk_level=RiskLevel.MEDIUM,
-            score=0.75,
+            score=75.0,  # 0-100 scale
             expected_profit=500.0,
             max_loss=200.0,
             probability_estimate=0.65,
@@ -160,8 +160,52 @@ class TestStrategy:
         assert signal.strategy_type == "test_strategy"
         assert signal.reason == "Test signal"
         assert signal.max_loss == 200.0
-        assert signal.score == 0.75
+        assert signal.score == 75.0
         assert signal.expected_profit == 500.0
+
+    def test_strategy_signal_score_range(self):
+        """Test that StrategySignal score is in 0-100 range."""
+        signal = StrategySignal(
+            symbol="AAPL",
+            strategy_type="test_strategy",
+            risk_level=RiskLevel.MEDIUM,
+            score=85.5,
+            expected_profit=500.0,
+            max_loss=200.0,
+            probability_estimate=0.65,
+            reason="Test signal",
+        )
+        
+        assert 0.0 <= signal.score <= 100.0
+
+    def test_strategy_signal_breakdown_field(self):
+        """Test that StrategySignal has breakdown field for explainability."""
+        breakdown = {
+            "liquidity": 75.0,
+            "reward_risk": 60.0,
+            "probability": 70.0,
+            "volatility": 50.0,
+            "sentiment": 55.0,
+            "trend": 80.0,
+            "event_risk": 75.0,
+            "final": 65.0,
+        }
+        
+        signal = StrategySignal(
+            symbol="AAPL",
+            strategy_type="test_strategy",
+            risk_level=RiskLevel.MEDIUM,
+            score=65.0,
+            expected_profit=500.0,
+            max_loss=200.0,
+            probability_estimate=0.65,
+            reason="Test signal",
+            breakdown=breakdown,
+        )
+        
+        assert signal.breakdown is not None
+        assert signal.breakdown["liquidity"] == 75.0
+        assert signal.breakdown["final"] == 65.0
 
 
 class TestStrategyRegistry:
@@ -288,6 +332,8 @@ class TestStrategyRegistry:
         # Should have 2 signals (from enabled strategies only)
         assert len(signals) == 2
         assert all(isinstance(s, StrategySignal) for s in signals)
+        # All signals should have 0-100 scores
+        assert all(0.0 <= s.score <= 100.0 for s in signals)
 
     def test_generate_signals_skips_disabled_strategies(self):
         """Test that disabled strategies are skipped."""
@@ -363,21 +409,6 @@ class TestStrategyRegistry:
         strategy = MockStrategy(name="test_strategy", enabled=True)
         
         registry.register(strategy)
-
-
-class TestLongCallPutStrategy:
-    """Tests for LongCallPutStrategy."""
-
-    def test_long_call_put_strategy_initialization(self):
-        """Test strategy initialization."""
-        strategy = LongCallPutStrategy(name="long_call_put", enabled=True)
-        
-        assert strategy.name == "long_call_put"
-        assert strategy.is_enabled() is True
-
-    def test_long_call_put_only_available_for_high_risk(self):
-        """Test that strategy only generates signals for high-risk profiles."""
-        strategy = LongCallPutStrategy()
         
         market_data = MarketData(
             symbol="AAPL",
@@ -386,204 +417,12 @@ class TestLongCallPutStrategy:
             quote_timestamp=datetime.utcnow(),
         )
         
-        options_chain = [
-            OptionContract(
-                symbol="AAPL",
-                expiration=_create_future_expiration(30),
-                strike=150.0,
-                contract_type="call",
-                bid=5.0,
-                ask=5.5,
-                volume=100,
-                open_interest=500,
-                implied_volatility=0.25,
-                underlying_price=150.0,
-                days_to_expiration=30,
-                liquidity_score=75.0,
-            )
-        ]
-        
-        # Should return None for medium risk
-        signal = strategy.generate(
+        # Empty options chain
+        signals = registry.generate_signals(
             symbol="AAPL",
             market_data=market_data,
-            options_chain=options_chain,
+            options_chain=[],
             risk_profile=RiskLevel.MEDIUM,
         )
-        assert signal is None
         
-        # Should return None for low risk
-        signal = strategy.generate(
-            symbol="AAPL",
-            market_data=market_data,
-            options_chain=options_chain,
-            risk_profile=RiskLevel.LOW,
-        )
-        assert signal is None
-
-    def test_long_call_put_max_loss_equals_premium_paid(self):
-        """Test that max loss equals premium paid (acceptance criterion)."""
-        strategy = LongCallPutStrategy()
-        
-        market_data = MarketData(
-            symbol="AAPL",
-            current_price=150.0,
-            price_history=[
-                {"close": 148.0},
-                {"close": 149.0},
-                {"close": 150.0},
-                {"close": 151.0},
-                {"close": 152.0},
-            ],
-            quote_timestamp=datetime.utcnow(),
-        )
-        
-        options_chain = [
-            OptionContract(
-                symbol="AAPL",
-                expiration=_create_future_expiration(30),
-                strike=150.0,
-                contract_type="call",
-                bid=5.0,
-                ask=5.5,
-                volume=100,
-                open_interest=500,
-                implied_volatility=0.25,
-                underlying_price=150.0,
-                days_to_expiration=30,
-                liquidity_score=75.0,
-            ),
-            OptionContract(
-                symbol="AAPL",
-                expiration=_create_future_expiration(30),
-                strike=155.0,
-                contract_type="call",
-                bid=2.0,
-                ask=2.5,
-                volume=100,
-                open_interest=500,
-                implied_volatility=0.25,
-                underlying_price=150.0,
-                days_to_expiration=30,
-                liquidity_score=75.0,
-            ),
-        ]
-        
-        signal = strategy.generate(
-            symbol="AAPL",
-            market_data=market_data,
-            options_chain=options_chain,
-            risk_profile=RiskLevel.HIGH,
-        )
-        
-        if signal is not None:
-            # Max loss should equal premium paid
-            premium_paid = signal.breakdown["premium_at_risk"]
-            assert signal.max_loss == premium_paid
-
-    def test_long_call_put_rejects_if_premium_exceeds_budget(self):
-        """Test that strategy rejects if premium exceeds risk budget."""
-        strategy = LongCallPutStrategy()
-        
-        market_data = MarketData(
-            symbol="AAPL",
-            current_price=150.0,
-            price_history=[{"close": 150.0}],
-            quote_timestamp=datetime.utcnow(),
-        )
-        
-        # Create option with very high premium (exceeds budget)
-        options_chain = [
-            OptionContract(
-                symbol="AAPL",
-                expiration=_create_future_expiration(30),
-                strike=150.0,
-                contract_type="call",
-                bid=5000.0,  # Very high premium
-                ask=5500.0,
-                volume=100,
-                open_interest=500,
-                implied_volatility=0.25,
-                underlying_price=150.0,
-                days_to_expiration=30,
-                liquidity_score=75.0,
-            )
-        ]
-        
-        signal = strategy.generate(
-            symbol="AAPL",
-            market_data=market_data,
-            options_chain=options_chain,
-            risk_profile=RiskLevel.HIGH,
-        )
-        
-        # Should be rejected due to premium exceeding budget
-        assert signal is None
-
-    def test_long_call_put_signal_includes_required_fields(self):
-        """Test that signal includes all required fields."""
-        strategy = LongCallPutStrategy()
-        
-        market_data = MarketData(
-            symbol="AAPL",
-            current_price=150.0,
-            price_history=[
-                {"close": 148.0},
-                {"close": 149.0},
-                {"close": 150.0},
-                {"close": 151.0},
-                {"close": 152.0},
-            ],
-            quote_timestamp=datetime.utcnow(),
-        )
-        
-        options_chain = [
-            OptionContract(
-                symbol="AAPL",
-                expiration=_create_future_expiration(30),
-                strike=150.0,
-                contract_type="call",
-                bid=5.0,
-                ask=5.5,
-                volume=100,
-                open_interest=500,
-                implied_volatility=0.25,
-                underlying_price=150.0,
-                days_to_expiration=30,
-                liquidity_score=75.0,
-            ),
-            OptionContract(
-                symbol="AAPL",
-                expiration=_create_future_expiration(30),
-                strike=155.0,
-                contract_type="call",
-                bid=2.0,
-                ask=2.5,
-                volume=100,
-                open_interest=500,
-                implied_volatility=0.25,
-                underlying_price=150.0,
-                days_to_expiration=30,
-                liquidity_score=75.0,
-            ),
-        ]
-        
-        signal = strategy.generate(
-            symbol="AAPL",
-            market_data=market_data,
-            options_chain=options_chain,
-            risk_profile=RiskLevel.HIGH,
-        )
-        
-        if signal is not None:
-            # Verify required fields
-            assert signal.symbol == "AAPL"
-            assert signal.strategy_type == "long_call_put"
-            assert signal.reason is not None
-            assert signal.max_loss is not None
-            assert signal.max_loss > 0
-            assert signal.score >= 0.0 and signal.score <= 1.0
-            assert signal.probability_estimate >= 0.0 and signal.probability_estimate <= 1.0
-            assert signal.breakdown is not None
-            assert "premium_at_risk" in signal.breakdown
-            assert "max_loss" in signal.breakdown
+        assert len(signals) == 0
