@@ -175,6 +175,14 @@ class Signal(Base):
     profit/loss estimates, strategy information, volatility context, Greeks analysis,
     and event-risk information. Every signal includes an explanation (reason) and 
     max-loss estimate as required.
+    
+    Status can be:
+    - pending: Signal generated, awaiting review
+    - approved: User approved the signal
+    - rejected: User rejected the signal
+    - expired: Signal expired (e.g., option expired)
+    - executed: Trade was executed
+    - no_trade: No safe opportunity found (risk thresholds not met)
     """
 
     __tablename__ = "signals"
@@ -189,7 +197,7 @@ class Signal(Base):
     max_loss = Column(Float, nullable=False)  # Maximum loss estimate in dollars
     probability_estimate = Column(Float, nullable=False)  # Probability of profit (0.0 to 1.0)
     reason = Column(Text, nullable=False)  # Explanation of the signal (required)
-    status = Column(String(50), default="pending", nullable=False, index=True)  # pending, approved, rejected, expired, executed
+    status = Column(String(50), default="pending", nullable=False, index=True)  # pending, approved, rejected, expired, executed, no_trade
     option_contract_id = Column(Integer, ForeignKey("option_contracts.id"), nullable=True, index=True)  # Optional: linked contract
     breakdown = Column(Text, nullable=True)  # JSON string of factor scores and Greeks summary
     event_risks = Column(Text, nullable=True)  # JSON string of detected event risks
@@ -245,7 +253,7 @@ class Trade(Base):
 
 
 class BacktestResult(Base):
-    """Backtest result model."""
+    """Backtest result model for storing strategy backtest results."""
 
     __tablename__ = "backtest_results"
 
@@ -256,15 +264,14 @@ class BacktestResult(Base):
     start_date = Column(DateTime, nullable=False)
     end_date = Column(DateTime, nullable=False)
     initial_capital = Column(Float, nullable=False)
-    final_value = Column(Float, nullable=False)
-    total_return = Column(Float, nullable=False)  # Percentage return
+    final_capital = Column(Float, nullable=False)
+    total_return_pct = Column(Float, nullable=False)
+    max_drawdown_pct = Column(Float, nullable=False)
+    sharpe_ratio = Column(Float, nullable=True)
+    win_rate = Column(Float, nullable=True)
     total_trades = Column(Integer, nullable=False)
     winning_trades = Column(Integer, nullable=False)
     losing_trades = Column(Integer, nullable=False)
-    win_rate = Column(Float, nullable=False)  # Percentage
-    max_drawdown = Column(Float, nullable=False)  # Percentage
-    sharpe_ratio = Column(Float, nullable=True)
-    sortino_ratio = Column(Float, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     # Relationships
