@@ -5,7 +5,7 @@ Supports dev, test, and prod environments via environment variables.
 
 import os
 from enum import Enum
-from typing import Optional
+from typing import Optional, Dict
 
 
 class Environment(str, Enum):
@@ -105,6 +105,41 @@ class Config:
     # Risk Management
     DEFAULT_RISK_LEVEL: str = os.getenv("DEFAULT_RISK_LEVEL", "medium")
     MAX_DAILY_LOSS_PCT: float = float(os.getenv("MAX_DAILY_LOSS_PCT", "5.0"))
+
+    # Risk-Adjusted Scoring Weights
+    # Each risk level has different weight priorities
+    # LOW: favors liquidity, defined risk, lower max loss
+    # MEDIUM: balanced approach
+    # HIGH: allows volatility and lower probability if payoff is larger
+    SCORING_WEIGHTS_LOW: Dict[str, float] = {
+        "liquidity": 0.30,      # Higher weight for liquidity
+        "reward_risk": 0.15,    # Lower weight for reward/risk
+        "probability": 0.25,    # High weight for probability
+        "volatility": 0.05,     # Lower weight for volatility
+        "sentiment": 0.10,      # Moderate weight for sentiment
+        "trend": 0.10,          # Moderate weight for trend
+        "event_risk": 0.05,     # Lower weight for event risk
+    }
+    
+    SCORING_WEIGHTS_MEDIUM: Dict[str, float] = {
+        "liquidity": 0.20,      # Standard weight
+        "reward_risk": 0.20,    # Standard weight
+        "probability": 0.20,    # Standard weight
+        "volatility": 0.10,     # Standard weight
+        "sentiment": 0.12,      # Standard weight
+        "trend": 0.13,          # Standard weight
+        "event_risk": 0.05,     # Standard weight
+    }
+    
+    SCORING_WEIGHTS_HIGH: Dict[str, float] = {
+        "liquidity": 0.10,      # Lower weight for liquidity
+        "reward_risk": 0.25,    # Higher weight for reward/risk
+        "probability": 0.15,    # Lower weight for probability
+        "volatility": 0.15,     # Higher weight for volatility
+        "sentiment": 0.15,      # Higher weight for sentiment
+        "trend": 0.15,          # Higher weight for trend
+        "event_risk": 0.05,     # Lower weight for event risk
+    }
 
     # Strategy Configuration
     ENABLED_STRATEGIES: list = os.getenv("ENABLED_STRATEGIES", "").split(",") if os.getenv("ENABLED_STRATEGIES") else []
@@ -224,6 +259,25 @@ class Config:
             return True
         # If enabled list is empty, all strategies are enabled by default
         return not cls.ENABLED_STRATEGIES
+
+    @classmethod
+    def get_scoring_weights(cls, risk_level: str) -> Dict[str, float]:
+        """Get scoring weights for a specific risk level.
+        
+        Args:
+            risk_level: Risk level ("low", "medium", or "high")
+            
+        Returns:
+            Dictionary of scoring weights for the risk level
+        """
+        risk_level_lower = risk_level.lower() if isinstance(risk_level, str) else "medium"
+        
+        if risk_level_lower == "low":
+            return cls.SCORING_WEIGHTS_LOW
+        elif risk_level_lower == "high":
+            return cls.SCORING_WEIGHTS_HIGH
+        else:
+            return cls.SCORING_WEIGHTS_MEDIUM
 
 
 # Export singleton config instance

@@ -40,6 +40,8 @@ class StrategySignal:
     - 40-60: Average signal
     - 60-80: Good signal, above average
     - 80-100: Excellent signal, high confidence
+    
+    Scores are adjusted based on user risk level to prioritize different factors.
     """
     symbol: str
     strategy_type: str  # Name of the strategy that generated this
@@ -94,7 +96,7 @@ class Strategy(ABC):
             Every signal must include:
             - reason: Explanation of the signal
             - max_loss: Maximum loss estimate in dollars
-            - score: Confidence score 0.0-100.0
+            - score: Confidence score 0.0-100.0 (adjusted for risk level)
             - expected_profit: Expected profit in dollars
             - breakdown: Dict with component scores for explainability
         """
