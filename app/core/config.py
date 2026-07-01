@@ -106,6 +106,18 @@ class Config:
     DEFAULT_RISK_LEVEL: str = os.getenv("DEFAULT_RISK_LEVEL", "medium")
     MAX_DAILY_LOSS_PCT: float = float(os.getenv("MAX_DAILY_LOSS_PCT", "5.0"))
 
+    # Signal Scoring Thresholds
+    # Minimum score threshold for recommending a trade (0-100 scale)
+    MIN_SIGNAL_SCORE: float = float(os.getenv("MIN_SIGNAL_SCORE", "50.0"))
+    
+    # Minimum liquidity score threshold (0-100 scale)
+    MIN_LIQUIDITY_SCORE: float = float(os.getenv("MIN_LIQUIDITY_SCORE", "40.0"))
+    
+    # Minimum liquidity score by risk level (can override MIN_LIQUIDITY_SCORE)
+    MIN_LIQUIDITY_SCORE_LOW: float = float(os.getenv("MIN_LIQUIDITY_SCORE_LOW", "60.0"))
+    MIN_LIQUIDITY_SCORE_MEDIUM: float = float(os.getenv("MIN_LIQUIDITY_SCORE_MEDIUM", "40.0"))
+    MIN_LIQUIDITY_SCORE_HIGH: float = float(os.getenv("MIN_LIQUIDITY_SCORE_HIGH", "30.0"))
+
     # Risk-Adjusted Scoring Weights
     # Each risk level has different weight priorities
     # LOW: favors liquidity, defined risk, lower max loss
@@ -233,52 +245,19 @@ class Config:
         return cls.LIVE_TRADING_ENABLED and not cls.PAPER_TRADING_ENABLED
 
     @classmethod
-    def is_paper_trading_enabled(cls) -> bool:
-        """Check if paper trading is enabled.
-        
-        Returns:
-            True if PAPER_TRADING_ENABLED is True
-        """
-        return cls.PAPER_TRADING_ENABLED
-
-    @classmethod
-    def is_strategy_enabled(cls, strategy_name: str) -> bool:
-        """Check if a strategy is enabled.
+    def get_min_liquidity_score(cls, risk_level: str) -> float:
+        """Get minimum liquidity score threshold for a risk level.
         
         Args:
-            strategy_name: Name of strategy to check
+            risk_level: Risk level ("low", "medium", "high")
             
         Returns:
-            True if strategy is enabled (not in disabled list)
+            Minimum liquidity score threshold (0-100)
         """
-        # If explicitly disabled, return False
-        if strategy_name in cls.DISABLED_STRATEGIES:
-            return False
-        # If enabled list is specified and strategy is in it, return True
-        if cls.ENABLED_STRATEGIES and strategy_name in cls.ENABLED_STRATEGIES:
-            return True
-        # If enabled list is empty, all strategies are enabled by default
-        return not cls.ENABLED_STRATEGIES
-
-    @classmethod
-    def get_scoring_weights(cls, risk_level: str) -> Dict[str, float]:
-        """Get scoring weights for a specific risk level.
-        
-        Args:
-            risk_level: Risk level ("low", "medium", or "high")
-            
-        Returns:
-            Dictionary of scoring weights for the risk level
-        """
-        risk_level_lower = risk_level.lower() if isinstance(risk_level, str) else "medium"
-        
-        if risk_level_lower == "low":
-            return cls.SCORING_WEIGHTS_LOW
-        elif risk_level_lower == "high":
-            return cls.SCORING_WEIGHTS_HIGH
-        else:
-            return cls.SCORING_WEIGHTS_MEDIUM
-
-
-# Export singleton config instance
-config = Config()
+        risk_level = risk_level.lower().strip()
+        if risk_level == "low":
+            return cls.MIN_LIQUIDITY_SCORE_LOW
+        elif risk_level == "high":
+            return cls.MIN_LIQUIDITY_SCORE_HIGH
+        else:  # medium or default
+            return cls.MIN_LIQUIDITY_SCORE_MEDIUM
