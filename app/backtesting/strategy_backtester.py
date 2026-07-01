@@ -6,13 +6,13 @@ data preparation, signal generation, and analysis logic.
 
 import logging
 from abc import ABC, abstractmethod
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple, Callable
 from datetime import datetime, timedelta
 
 import pandas as pd
 import numpy as np
 
-from app.backtesting.engine import BacktestEngine, BacktestResult
+from app.backtesting.engine import BacktestEngine, BacktestResult, SimulatedTrade
 
 logger = logging.getLogger(__name__)
 
@@ -82,3 +82,37 @@ class StrategyBacktester(ABC):
         )
         
         return result
+
+    def replay_historical_signals(
+        self,
+        symbol: str,
+        price_data: pd.DataFrame,
+        **kwargs,
+    ) -> Tuple[BacktestResult, List[SimulatedTrade]]:
+        """Replay historical signals day-by-day to avoid look-ahead bias.
+        
+        This method simulates signal generation as if the strategy were running
+        in real-time, using only data available up to each day.
+        
+        Args:
+            symbol: Stock symbol
+            price_data: DataFrame with OHLCV data
+            **kwargs: Strategy-specific parameters
+            
+        Returns:
+            Tuple of (BacktestResult, List[SimulatedTrade])
+        """
+        def signal_generator_fn(sym: str, price_data_up_to_date: pd.DataFrame) -> int:
+            """Generate signal using only data available up to current date."""
+            signals = self.generate_signals(price_data_up_to_date, **kwargs)
+            # Return the most recent signal
+            return int(signals.iloc[-1]) if len(signals) > 0 else 0
+        
+        result, trades = self.engine.replay_signals_day_by_day(
+            symbol=symbol,
+            price_data=price_data,
+            signal_generator_fn=signal_generator_fn,
+            strategy_name=self.strategy_name,
+        )
+        
+        return result, trades

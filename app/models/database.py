@@ -238,8 +238,6 @@ class Trade(Base):
     is_paper_trading = Column(Boolean, default=True, nullable=False)  # True for paper, False for live
     opened_at = Column(DateTime, default=datetime.utcnow, nullable=False)  # When trade was opened
     closed_at = Column(DateTime, nullable=True)  # When trade was closed (null if still open)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
     # Relationships
     user = relationship("User", back_populates="trades")
@@ -253,26 +251,72 @@ class Trade(Base):
 
 
 class BacktestResult(Base):
-    """Backtest result model for storing strategy backtest results."""
+    """Backtest result model for storing historical signal replay results.
+    
+    Stores backtest metadata and summary statistics from historical signal replay.
+    Each backtest result can have multiple associated simulated trades.
+    """
 
     __tablename__ = "backtest_results"
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
-    strategy_name = Column(String(255), nullable=False)
-    symbol = Column(String(20), nullable=False, index=True)
-    start_date = Column(DateTime, nullable=False)
-    end_date = Column(DateTime, nullable=False)
-    initial_capital = Column(Float, nullable=False)
-    final_capital = Column(Float, nullable=False)
-    total_return_pct = Column(Float, nullable=False)
-    max_drawdown_pct = Column(Float, nullable=False)
-    sharpe_ratio = Column(Float, nullable=True)
-    win_rate = Column(Float, nullable=True)
-    total_trades = Column(Integer, nullable=False)
-    winning_trades = Column(Integer, nullable=False)
-    losing_trades = Column(Integer, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    strategy_name = Column(String(255), nullable=False)  # Name of strategy tested
+    symbol = Column(String(20), nullable=False, index=True)  # Stock symbol tested
+    start_date = Column(DateTime, nullable=False)  # Backtest start date
+    end_date = Column(DateTime, nullable=False)  # Backtest end date
+    initial_cash = Column(Float, nullable=False)  # Starting capital
+    final_value = Column(Float, nullable=False)  # Final portfolio value
+    total_return = Column(Float, nullable=False)  # Total return percentage
+    annual_return = Column(Float, nullable=False)  # Annualized return percentage
+    sharpe_ratio = Column(Float, nullable=False)  # Sharpe ratio
+    max_drawdown = Column(Float, nullable=False)  # Maximum drawdown percentage
+    win_rate = Column(Float, nullable=False)  # Percentage of winning trades
+    total_trades = Column(Integer, nullable=False)  # Number of trades executed
+    avg_trade_profit = Column(Float, nullable=False)  # Average profit per trade
+    best_trade = Column(Float, nullable=False)  # Best single trade profit
+    worst_trade = Column(Float, nullable=False)  # Worst single trade loss
+    profit_factor = Column(Float, nullable=False)  # Gross profit / gross loss
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
     # Relationships
     user = relationship("User", back_populates="backtest_results")
+    simulated_trades = relationship("SimulatedTrade", back_populates="backtest_result", cascade="all, delete-orphan")
+
+    # Composite index for efficient querying by user and symbol
+    __table_args__ = (
+        Index('ix_backtest_results_user_symbol', 'user_id', 'symbol'),
+    )
+
+
+class SimulatedTrade(Base):
+    """Simulated trade from historical signal replay.
+    
+    Stores individual trades generated during backtest/historical signal replay.
+    Each trade is linked to a backtest result and includes entry/exit details,
+    P&L, and the reason for entry.
+    """
+
+    __tablename__ = "simulated_trades"
+
+    id = Column(Integer, primary_key=True, index=True)
+    backtest_result_id = Column(Integer, ForeignKey("backtest_results.id"), nullable=False, index=True)
+    entry_date = Column(DateTime, nullable=False)  # Date when trade was entered
+    entry_price = Column(Float, nullable=False)  # Price at entry
+    exit_date = Column(DateTime, nullable=True)  # Date when trade was exited (None if still open)
+    exit_price = Column(Float, nullable=True)  # Price at exit (None if still open)
+    quantity = Column(Integer, nullable=False)  # Number of shares/contracts
+    pnl = Column(Float, nullable=True)  # Realized P&L (None if still open)
+    pnl_pct = Column(Float, nullable=True)  # P&L as percentage (None if still open)
+    reason = Column(Text, nullable=False)  # Reason for entry (from signal)
+    signal_score = Column(Float, nullable=False)  # Score of the signal that triggered entry
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    # Relationships
+    backtest_result = relationship("BacktestResult", back_populates="simulated_trades")
+
+    # Composite index for efficient querying by backtest result
+    __table_args__ = (
+        Index('ix_simulated_trades_backtest_result', 'backtest_result_id'),
+    )
