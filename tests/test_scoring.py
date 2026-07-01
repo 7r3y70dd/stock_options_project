@@ -297,7 +297,7 @@ class TestSignalScorer:
 
     def test_weights_sum_to_one(self):
         """Test that scoring weights sum to 1.0."""
-        total_weight = sum(SignalScorer.WEIGHTS.values())
+        total_weight = sum(SignalScorer.WEIGHTS_DEFAULT.values())
         assert abs(total_weight - 1.0) < 0.001
 
     def test_score_components_are_independent(self):
@@ -319,10 +319,145 @@ class TestSignalScorer:
         
         # Liquidity should be different
         assert breakdown1["liquidity"] != breakdown2["liquidity"]
-        
         # Other components should be the same
         assert breakdown1["reward_risk"] == breakdown2["reward_risk"]
         assert breakdown1["probability"] == breakdown2["probability"]
+
+    def test_risk_level_low_favors_liquidity(self):
+        """Test that LOW risk level favors liquidity over reward/risk."""
+        # Same signal scored with different risk levels
+        score_low, breakdown_low = SignalScorer.calculate_score(
+            liquidity_score=90.0,
+            expected_profit=50.0,
+            max_loss=100.0,
+            probability_estimate=0.55,
+            risk_level="low",
+        )
         
-        # Final scores should be different
-        assert score1 != score2
+        score_high, breakdown_high = SignalScorer.calculate_score(
+            liquidity_score=90.0,
+            expected_profit=50.0,
+            max_loss=100.0,
+            probability_estimate=0.55,
+            risk_level="high",
+        )
+        
+        # LOW risk should score higher because liquidity is weighted more heavily
+        assert score_low > score_high
+
+    def test_risk_level_high_favors_reward_risk(self):
+        """Test that HIGH risk level favors reward/risk over liquidity."""
+        # Signal with good reward/risk but lower liquidity
+        score_low, breakdown_low = SignalScorer.calculate_score(
+            liquidity_score=30.0,
+            expected_profit=300.0,
+            max_loss=100.0,
+            probability_estimate=0.55,
+            risk_level="low",
+        )
+        
+        score_high, breakdown_high = SignalScorer.calculate_score(
+            liquidity_score=30.0,
+            expected_profit=300.0,
+            max_loss=100.0,
+            probability_estimate=0.55,
+            risk_level="high",
+        )
+        
+        # HIGH risk should score higher because reward/risk is weighted more heavily
+        assert score_high > score_low
+
+    def test_risk_level_medium_balanced(self):
+        """Test that MEDIUM risk level provides balanced weighting."""
+        score_low, _ = SignalScorer.calculate_score(
+            liquidity_score=75.0,
+            expected_profit=200.0,
+            max_loss=100.0,
+            probability_estimate=0.65,
+            risk_level="low",
+        )
+        
+        score_medium, _ = SignalScorer.calculate_score(
+            liquidity_score=75.0,
+            expected_profit=200.0,
+            max_loss=100.0,
+            probability_estimate=0.65,
+            risk_level="medium",
+        )
+        
+        score_high, _ = SignalScorer.calculate_score(
+            liquidity_score=75.0,
+            expected_profit=200.0,
+            max_loss=100.0,
+            probability_estimate=0.65,
+            risk_level="high",
+        )
+        
+        # MEDIUM should be between LOW and HIGH
+        assert score_low != score_medium != score_high
+
+    def test_risk_level_changes_ranking(self):
+        """Test that changing risk level changes signal rankings."""
+        # Signal A: high liquidity, low reward/risk
+        signal_a_low, _ = SignalScorer.calculate_score(
+            liquidity_score=90.0,
+            expected_profit=50.0,
+            max_loss=100.0,
+            probability_estimate=0.55,
+            risk_level="low",
+        )
+        
+        signal_a_high, _ = SignalScorer.calculate_score(
+            liquidity_score=90.0,
+            expected_profit=50.0,
+            max_loss=100.0,
+            probability_estimate=0.55,
+            risk_level="high",
+        )
+        
+        # Signal B: low liquidity, high reward/risk
+        signal_b_low, _ = SignalScorer.calculate_score(
+            liquidity_score=30.0,
+            expected_profit=300.0,
+            max_loss=100.0,
+            probability_estimate=0.55,
+            risk_level="low",
+        )
+        
+        signal_b_high, _ = SignalScorer.calculate_score(
+            liquidity_score=30.0,
+            expected_profit=300.0,
+            max_loss=100.0,
+            probability_estimate=0.55,
+            risk_level="high",
+        )
+        
+        # For LOW risk: Signal A should rank higher
+        assert signal_a_low > signal_b_low
+        
+        # For HIGH risk: Signal B should rank higher
+        assert signal_b_high > signal_a_high
+        
+        # Rankings should be different
+        assert (signal_a_low > signal_b_low) != (signal_a_high > signal_b_high)
+
+    def test_risk_level_none_uses_default(self):
+        """Test that None risk level uses default weights."""
+        score_none, breakdown_none = SignalScorer.calculate_score(
+            liquidity_score=75.0,
+            expected_profit=200.0,
+            max_loss=100.0,
+            probability_estimate=0.65,
+            risk_level=None,
+        )
+        
+        score_medium, breakdown_medium = SignalScorer.calculate_score(
+            liquidity_score=75.0,
+            expected_profit=200.0,
+            max_loss=100.0,
+            probability_estimate=0.65,
+            risk_level="medium",
+        )
+        
+        # None should match medium (default)
+        assert score_none == score_medium

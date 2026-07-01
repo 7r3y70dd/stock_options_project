@@ -11,10 +11,15 @@ Implements a comprehensive scoring system that combines multiple factors:
 
 Each component is independently scored 0-100 and weighted to produce a final score.
 The breakdown is provided for full transparency and explainability.
+
+Weights are adjusted based on user risk level:
+- LOW: favors high liquidity, defined risk, lower max loss
+- MEDIUM: balanced approach
+- HIGH: allows more volatility and lower probability if payoff is larger
 """
 
 import logging
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
@@ -57,10 +62,12 @@ class SignalScorer:
     - Sentiment (12%): News sentiment alignment with strategy
     - Trend (13%): Price trend alignment with strategy direction
     - Event Risk (5%): Impact of upcoming events
+    
+    Weights are adjusted based on risk level to prioritize different factors.
     """
 
-    # Weighting factors (must sum to 1.0)
-    WEIGHTS = {
+    # Default weighting factors (must sum to 1.0)
+    WEIGHTS_DEFAULT = {
         "liquidity": 0.20,
         "reward_risk": 0.20,
         "probability": 0.20,
@@ -321,8 +328,9 @@ class SignalScorer:
         trend_direction: Optional[str] = None,
         event_risks: Optional[str] = None,
         strategy_type: str = "",
+        risk_level: Optional[str] = None,
         **kwargs,
-    ) -> tuple:
+    ) -> Tuple[float, Dict[str, float]]:
         """Calculate comprehensive signal score (0-100) with breakdown.
         
         Args:
@@ -335,6 +343,7 @@ class SignalScorer:
             trend_direction: "up", "down", "neutral"
             event_risks: Event risk description
             strategy_type: Type of strategy
+            risk_level: Risk level ("low", "medium", "high") for weight adjustment
             **kwargs: Additional parameters (ignored)
             
         Returns:
@@ -351,26 +360,54 @@ class SignalScorer:
         trend = cls.score_trend(trend_direction, strategy_type)
         event_risk = cls.score_event_risk(event_risks)
         
-        # Calculate weighted average
+        # Get weights based on risk level
+        weights = cls._get_weights_for_risk_level(risk_level)
+        
+        # Calculate weighted final score
         final_score = (
-            liquidity * cls.WEIGHTS["liquidity"]
-            + reward_risk * cls.WEIGHTS["reward_risk"]
-            + probability * cls.WEIGHTS["probability"]
-            + volatility * cls.WEIGHTS["volatility"]
-            + sentiment * cls.WEIGHTS["sentiment"]
-            + trend * cls.WEIGHTS["trend"]
-            + event_risk * cls.WEIGHTS["event_risk"]
+            liquidity * weights["liquidity"]
+            + reward_risk * weights["reward_risk"]
+            + probability * weights["probability"]
+            + volatility * weights["volatility"]
+            + sentiment * weights["sentiment"]
+            + trend * weights["trend"]
+            + event_risk * weights["event_risk"]
         )
         
-        breakdown = ScoringBreakdown(
-            liquidity_score=liquidity,
-            reward_risk_score=reward_risk,
-            probability_score=probability,
-            volatility_score=volatility,
-            sentiment_score=sentiment,
-            trend_score=trend,
-            event_risk_score=event_risk,
-            final_score=final_score,
-        )
+        # Ensure final score is in valid range
+        final_score = max(0.0, min(100.0, final_score))
         
-        return final_score, breakdown.to_dict()
+        # Build breakdown dictionary
+        breakdown = {
+            "liquidity": liquidity,
+            "reward_risk": reward_risk,
+            "probability": probability,
+            "volatility": volatility,
+            "sentiment": sentiment,
+            "trend": trend,
+            "event_risk": event_risk,
+            "final": final_score,
+        }
+        
+        return final_score, breakdown
+
+    @classmethod
+    def _get_weights_for_risk_level(cls, risk_level: Optional[str]) -> Dict[str, float]:
+        """Get scoring weights for a specific risk level.
+        
+        Args:
+            risk_level: Risk level ("low", "medium", "high") or None for default
+            
+        Returns:
+            Dictionary of scoring weights
+        """
+        # Try to import config for risk-specific weights
+        try:
+            from app.core.config import config
+            if risk_level:
+                return config.get_scoring_weights(risk_level)
+        except (ImportError, AttributeError):
+            pass
+        
+        # Fall back to default weights
+        return cls.WEIGHTS_DEFAULT
