@@ -125,6 +125,17 @@ async def get_dashboard_data(
                 "paper_trading_enabled": data.risk_settings.paper_trading_enabled,
                 "live_trading_enabled": data.risk_settings.live_trading_enabled,
                 "live_trading_approved": data.risk_settings.live_trading_approved,
+                "risk_levels_info": [
+                    {
+                        "level": info.level,
+                        "description": info.description,
+                        "max_position_size_pct": info.max_position_size_pct,
+                        "allowed_strategies": info.allowed_strategies,
+                        "max_loss_per_trade_pct": info.max_loss_per_trade_pct,
+                        "requires_confirmation": info.requires_confirmation,
+                    }
+                    for info in data.risk_settings.risk_levels_info
+                ],
             },
             "timestamp": data.timestamp.isoformat(),
         }
@@ -333,183 +344,78 @@ async def get_top_opportunities(
         raise HTTPException(status_code=500, detail="Failed to retrieve opportunities")
 
 
-@router.get("/signals/{signal_id}", response_model=dict)
-async def get_signal_detail(
-    signal_id: int,
+@router.get("/risk-settings", response_model=dict)
+async def get_risk_settings(
     user_id: int = Query(..., description="User ID"),
     db: Session = Depends(get_db),
     dashboard: Dashboard = Depends(get_dashboard),
 ) -> dict:
-    """Get complete signal detail page.
-    
-    Sections:
-    - Strategy summary
-    - Contracts involved
-    - Score breakdown
-    - Max loss
-    - Max profit
-    - Breakeven
-    - News context
-    - Liquidity warning
-    - Greeks
-    - Backtest/paper history
+    """Get user's risk settings with available options.
     
     Args:
-        signal_id: Signal ID
         user_id: User ID
         db: Database session
         dashboard: Dashboard service
         
     Returns:
-        Complete signal detail data
-        
-    Raises:
-        HTTPException: If signal not found or error occurs
+        Risk settings with available risk levels
     """
     try:
-        detail = dashboard.get_signal_detail(user_id, signal_id, db)
-        
-        if not detail:
-            raise HTTPException(status_code=404, detail="Signal not found")
-        
+        settings = dashboard.get_risk_settings(user_id, db)
         return {
-            "signal_id": detail.signal_id,
-            "symbol": detail.symbol,
-            "strategy_type": detail.strategy_type,
-            "risk_level": detail.risk_level,
-            "score": detail.score,
-            "expected_profit": detail.expected_profit,
-            "max_loss": detail.max_loss,
-            "probability_estimate": detail.probability_estimate,
-            "reason": detail.reason,
-            "status": detail.status,
-            "created_at": detail.created_at.isoformat(),
-            "updated_at": detail.updated_at.isoformat(),
-            "breakdown": detail.breakdown,
-            "contracts": [
+            "risk_level": settings.risk_level,
+            "paper_trading_enabled": settings.paper_trading_enabled,
+            "live_trading_enabled": settings.live_trading_enabled,
+            "live_trading_approved": settings.live_trading_approved,
+            "risk_levels_info": [
                 {
-                    "contract_id": c.contract_id,
-                    "symbol": c.symbol,
-                    "expiration": c.expiration,
-                    "strike": c.strike,
-                    "contract_type": c.contract_type,
-                    "bid": c.bid,
-                    "ask": c.ask,
-                    "volume": c.volume,
-                    "open_interest": c.open_interest,
-                    "implied_volatility": c.implied_volatility,
-                    "delta": c.delta,
-                    "gamma": c.gamma,
-                    "theta": c.theta,
-                    "vega": c.vega,
-                    "underlying_price": c.underlying_price,
-                    "days_to_expiration": c.days_to_expiration,
-                    "liquidity_score": c.liquidity_score,
+                    "level": info.level,
+                    "description": info.description,
+                    "max_position_size_pct": info.max_position_size_pct,
+                    "allowed_strategies": info.allowed_strategies,
+                    "max_loss_per_trade_pct": info.max_loss_per_trade_pct,
+                    "requires_confirmation": info.requires_confirmation,
                 }
-                for c in detail.contracts
+                for info in settings.risk_levels_info
             ],
-            "event_risks": detail.event_risks,
-            "exit_rules": detail.exit_rules,
-            "related_news": [
-                {
-                    "article_id": n.article_id,
-                    "symbol": n.symbol,
-                    "title": n.title,
-                    "description": n.description,
-                    "url": n.url,
-                    "source": n.source,
-                    "published_at": n.published_at.isoformat() if n.published_at else None,
-                    "sentiment": n.sentiment,
-                    "sentiment_score": n.sentiment_score,
-                    "event_type": n.event_type,
-                }
-                for n in detail.related_news
-            ],
-            "related_trades": [
-                {
-                    "trade_id": t.trade_id,
-                    "symbol": t.symbol,
-                    "strategy_type": t.strategy_type,
-                    "entry_price": t.entry_price,
-                    "current_price": t.current_price,
-                    "quantity": t.quantity,
-                    "entry_date": t.entry_date.isoformat(),
-                    "current_pl": t.current_pl,
-                    "current_pl_pct": t.current_pl_pct,
-                    "status": t.status,
-                }
-                for t in detail.related_trades
-            ],
-            "greeks_summary": detail.greeks_summary,
         }
-    except HTTPException:
-        raise
     except Exception as e:
-        logger.error(f"Error getting signal detail for signal {signal_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to retrieve signal detail")
+        logger.error(f"Error getting risk settings for user {user_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to retrieve risk settings")
 
 
-@router.post("/signals/{signal_id}/approve", response_model=dict)
-async def approve_signal(
-    signal_id: int,
+@router.post("/risk-settings/update", response_model=dict)
+async def update_risk_settings(
     user_id: int = Query(..., description="User ID"),
+    risk_level: str = Query(..., description="New risk level (low, medium, high)"),
+    confirmed: bool = Query(False, description="Whether user confirmed high-risk selection"),
     db: Session = Depends(get_db),
     dashboard: Dashboard = Depends(get_dashboard),
 ) -> dict:
-    """Approve a signal for trading.
+    """Update user's risk level.
     
     Args:
-        signal_id: Signal ID
         user_id: User ID
+        risk_level: New risk level ("low", "medium", "high")
+        confirmed: Whether user confirmed high-risk selection
         db: Database session
         dashboard: Dashboard service
         
     Returns:
-        Result of approval
-        
-    Raises:
-        HTTPException: If signal not found or error occurs
+        Result of update operation
     """
     try:
-        result = dashboard.approve_signal(user_id, signal_id, db)
+        result = dashboard.update_risk_level(user_id, risk_level, db, confirmed)
+        
         if result["status"] == "error":
             raise HTTPException(status_code=400, detail=result["message"])
+        elif result["status"] == "confirmation_required":
+            # Return 202 Accepted with confirmation details
+            return result
+        
         return result
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error approving signal {signal_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to approve signal")
-
-
-@router.post("/signals/{signal_id}/reject", response_model=dict)
-async def reject_signal(
-    signal_id: int,
-    user_id: int = Query(..., description="User ID"),
-    db: Session = Depends(get_db),
-    dashboard: Dashboard = Depends(get_dashboard),
-) -> dict:
-    """Reject a signal.
-    
-    Args:
-        signal_id: Signal ID
-        user_id: User ID
-        db: Database session
-        dashboard: Dashboard service
-        
-    Returns:
-        Result of rejection
-        
-    Raises:
-        HTTPException: If signal not found or error occurs
-    """
-    try:
-        result = dashboard.reject_signal(user_id, signal_id, db)
-        if result["status"] == "error":
-            raise HTTPException(status_code=400, detail=result["message"])
-        return result
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error rejecting signal {signal_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to reject signal")
+        logger.error(f"Error updating risk level for user {user_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to update risk level")
