@@ -5,7 +5,7 @@ Defines the contract that all broker providers (paper trading, Alpaca, Tradier, 
 
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 
@@ -87,12 +87,113 @@ class Account:
     updated_at: Optional[datetime] = None
 
 
+@dataclass
+class OrderPreview:
+    """Preview of an order before execution.
+    
+    Shows the user all details of the order they are about to place,
+    including strategy, contracts, quantity, risk metrics, and reason.
+    """
+    preview_id: str
+    symbol: str
+    strategy_type: str
+    contracts: List[Dict] = field(default_factory=list)  # List of option contracts or underlying details
+    quantity: int = 0
+    side: OrderSide = OrderSide.BUY
+    order_type: OrderType = OrderType.MARKET
+    price: Optional[float] = None
+    max_loss: float = 0.0
+    max_profit: Optional[float] = None
+    breakeven: Optional[float] = None
+    reason: str = ""  # Explanation for the trade
+    created_at: Optional[datetime] = None
+    expires_at: Optional[datetime] = None
+
+
+@dataclass
+class OrderPreviewResult:
+    """Result of order preview operation."""
+    preview_id: str
+    status: str  # "pending", "confirmed", "cancelled", "expired"
+    preview: OrderPreview
+    message: str = ""
+    created_at: Optional[datetime] = None
+    confirmed_at: Optional[datetime] = None
+
+
 class BrokerProvider(ABC):
     """Abstract base class for broker providers.
     
     All broker providers must implement these methods to enable order placement,
     cancellation, position tracking, and account management.
     """
+
+    @abstractmethod
+    def preview_order(
+        self,
+        symbol: str,
+        quantity: int,
+        side: OrderSide,
+        strategy_type: str,
+        contracts: Optional[List[Dict]] = None,
+        max_loss: float = 0.0,
+        max_profit: Optional[float] = None,
+        breakeven: Optional[float] = None,
+        reason: str = "",
+        order_type: OrderType = OrderType.MARKET,
+        price: Optional[float] = None,
+        stop_price: Optional[float] = None,
+    ) -> OrderPreviewResult:
+        """Preview an order before execution.
+        
+        Args:
+            symbol: Stock ticker symbol
+            quantity: Number of shares/contracts
+            side: OrderSide.BUY or OrderSide.SELL
+            strategy_type: Name of the strategy (e.g., "covered_call")
+            contracts: Optional list of option contracts involved
+            max_loss: Maximum loss estimate in dollars
+            max_profit: Maximum profit estimate in dollars (if defined)
+            breakeven: Breakeven price (if applicable)
+            reason: Explanation for the trade
+            order_type: Type of order
+            price: Limit price if applicable
+            stop_price: Stop price if applicable
+            
+        Returns:
+            OrderPreviewResult with preview_id and status
+        """
+        pass
+
+    @abstractmethod
+    def confirm_preview(self, preview_id: str) -> Order:
+        """Confirm a preview and execute the order.
+        
+        Args:
+            preview_id: ID of the preview to confirm
+            
+        Returns:
+            Order object with order_id and status
+            
+        Raises:
+            ValueError: If preview_id is invalid or expired
+        """
+        pass
+
+    @abstractmethod
+    def cancel_preview(self, preview_id: str) -> OrderPreviewResult:
+        """Cancel a preview without executing the order.
+        
+        Args:
+            preview_id: ID of the preview to cancel
+            
+        Returns:
+            OrderPreviewResult with cancelled status
+            
+        Raises:
+            ValueError: If preview_id is invalid
+        """
+        pass
 
     @abstractmethod
     def place_order(

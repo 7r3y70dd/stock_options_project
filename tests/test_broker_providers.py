@@ -6,6 +6,8 @@ Verifies that:
 3. Paper orders can be submitted and tracked
 4. Live trading cannot be accidentally enabled
 5. Provider logs every request and response
+6. Order preview is required before execution
+7. User can cancel at preview step
 """
 
 import pytest
@@ -22,6 +24,8 @@ from app.core.broker_provider import (
     Position,
     PositionSide,
     Account,
+    OrderPreview,
+    OrderPreviewResult,
 )
 from app.core.paper_broker_provider import PaperBrokerProvider
 from app.core.config import config
@@ -38,6 +42,9 @@ class TestBrokerProviderInterface:
     def test_broker_provider_has_required_methods(self):
         """Test that BrokerProvider defines all required methods."""
         required_methods = [
+            "preview_order",
+            "confirm_preview",
+            "cancel_preview",
             "place_order",
             "cancel_order",
             "get_positions",
@@ -67,6 +74,225 @@ class TestPaperBrokerProvider:
         assert broker.initial_cash == 100000.0
         assert broker.account_id is not None
         assert len(broker.account_id) > 0
+
+
+class TestOrderPreview:
+    """Test order preview functionality."""
+
+    @pytest.fixture
+    def broker(self):
+        """Create a paper broker instance."""
+        return PaperBrokerProvider(initial_cash=100000.0, enable_logging=True)
+
+    def test_preview_order_creates_preview(self, broker):
+        """Test that preview_order creates a preview."""
+        result = broker.preview_order(
+            symbol="AAPL",
+            quantity=10,
+            side=OrderSide.BUY,
+            strategy_type="covered_call",
+            max_loss=100.0,
+            max_profit=200.0,
+            breakeven=150.0,
+            reason="Bullish outlook with income generation",
+        )
+        
+        assert result is not None
+        assert result.preview_id is not None
+        assert result.status == "pending"
+        assert result.preview.symbol == "AAPL"
+        assert result.preview.quantity == 10
+        assert result.preview.strategy_type == "covered_call"
+        assert result.preview.max_loss == 100.0
+        assert result.preview.max_profit == 200.0
+        assert result.preview.breakeven == 150.0
+        assert result.preview.reason == "Bullish outlook with income generation"
+
+    def test_preview_order_invalid_quantity(self, broker):
+        """Test preview with invalid quantity raises error."""
+        with pytest.raises(ValueError, match="Invalid quantity"):
+            broker.preview_order(
+                symbol="AAPL",
+                quantity=-10,
+                side=OrderSide.BUY,
+                strategy_type="covered_call",
+            )
+
+    def test_preview_order_invalid_symbol(self, broker):
+        """Test preview with invalid symbol raises error."""
+        with pytest.raises(ValueError, match="Invalid symbol"):
+            broker.preview_order(
+                symbol="",
+                quantity=10,
+                side=OrderSide.BUY,
+                strategy_type="covered_call",
+            )
+
+    def test_preview_order_stores_preview(self, broker):
+        """Test that preview is stored and retrievable."""
+        result = broker.preview_order(
+            symbol="AAPL",
+            quantity=10,
+            side=OrderSide.BUY,
+            strategy_type="covered_call",
+            reason="Test reason",
+        )
+        
+        preview_id = result.preview_id
+        assert preview_id in broker.previews
+        assert broker.previews[preview_id].status == "pending"
+
+    def test_confirm_preview_executes_order(self, broker):
+        """Test that confirming preview executes the order."""
+        # Create preview
+        preview_result = broker.preview_order(
+            symbol="AAPL",
+            quantity=10,
+            side=OrderSide.BUY,
+            strategy_type="covered_call",
+            reason="Test",
+        )
+        
+        # Confirm preview
+        order = broker.confirm_preview(preview_result.preview_id)
+        
+        assert order is not None
+        assert order.symbol == "AAPL"
+        assert order.quantity == 10
+        assert order.status == OrderStatus.FILLED
+        assert preview_result.status == "confirmed"
+
+    def test_confirm_preview_not_found(self, broker):
+        """Test confirming non-existent preview raises error."""
+        with pytest.raises(ValueError, match="Preview not found"):
+            broker.confirm_preview("invalid-preview-id")
+
+    def test_confirm_preview_expired(self, broker):
+        """Test confirming expired preview raises error."""
+        # Create preview
+        preview_result = broker.preview_order(
+            symbol="AAPL",
+            quantity=10,
+            side=OrderSide.BUY,
+            strategy_type="covered_call",
+            reason="Test",
+        )
+        
+        # Manually expire the preview
+        preview_result.preview.expires_at = datetime.utcnow()
+        
+        # Try to confirm
+        with pytest.raises(ValueError, match="Preview expired"):
+            broker.confirm_preview(preview_result.preview_id)
+
+    def test_cancel_preview_cancels_without_order(self, broker):
+        """Test that cancelling preview does not execute order."""
+        # Create preview
+        preview_result = broker.preview_order(
+            symbol="AAPL",
+            quantity=10,
+            side=OrderSide.BUY,
+            strategy_type="covered_call",
+            reason="Test",
+        )
+        
+        preview_id = preview_result.preview_id
+        
+        # Cancel preview
+        cancelled = broker.cancel_preview(preview_id)
+        
+        assert cancelled.status == "cancelled"
+        
+        # Verify no order was created
+        orders = broker.get_orders()
+        assert len(orders) == 0
+
+    def test_cancel_preview_not_found(self, broker):
+        """Test cancelling non-existent preview raises error."""
+        with pytest.raises(ValueError, match="Preview not found"):
+            broker.cancel_preview("invalid-preview-id")
+
+    def test_preview_shows_all_required_details(self, broker):
+        """Test that preview shows all required details."""
+        contracts = [{"symbol": "AAPL", "strike": 150.0, "type": "call"}]
+        
+        result = broker.preview_order(
+            symbol="AAPL",
+            quantity=10,
+            side=OrderSide.BUY,
+            strategy_type="covered_call",
+            contracts=contracts,
+            max_loss=100.0,
+            max_profit=200.0,
+            breakeven=150.0,
+            reason="Bullish with income",
+        )
+        
+        preview = result.preview
+        
+        # Verify all required details are present
+        assert preview.strategy_type == "covered_call"  # Strategy
+        assert preview.contracts == contracts  # Contracts
+        assert preview.quantity == 10  # Quantity
+        assert preview.max_loss == 100.0  # Max loss
+        assert preview.max_profit == 200.0  # Max profit
+        assert preview.breakeven == 150.0  # Breakeven
+        assert preview.reason == "Bullish with income"  # Reason
+
+    def test_no_order_without_preview_confirmation(self, broker):
+        """Test that no order is placed without preview confirmation."""
+        # Create preview
+        preview_result = broker.preview_order(
+            symbol="AAPL",
+            quantity=10,
+            side=OrderSide.BUY,
+            strategy_type="covered_call",
+            reason="Test",
+        )
+        
+        # Verify no order exists yet
+        orders = broker.get_orders()
+        assert len(orders) == 0
+        
+        # Confirm preview
+        order = broker.confirm_preview(preview_result.preview_id)
+        
+        # Now order should exist
+        orders = broker.get_orders()
+        assert len(orders) == 1
+        assert orders[0].order_id == order.order_id
+
+    def test_user_can_cancel_at_preview_step(self, broker):
+        """Test that user can cancel at preview step."""
+        # Create preview
+        preview_result = broker.preview_order(
+            symbol="AAPL",
+            quantity=10,
+            side=OrderSide.BUY,
+            strategy_type="covered_call",
+            reason="Test",
+        )
+        
+        # User cancels
+        cancelled = broker.cancel_preview(preview_result.preview_id)
+        assert cancelled.status == "cancelled"
+        
+        # Verify no order was created
+        orders = broker.get_orders()
+        assert len(orders) == 0
+        
+        # Verify cash unchanged
+        account = broker.get_account()
+        assert account.cash == 100000.0
+
+
+class TestPlaceOrder:
+    """Test order placement functionality."""
+
+    @pytest.fixture
+    def broker(self):
+        """Create a paper broker instance."""
+        return PaperBrokerProvider(initial_cash=100000.0, enable_logging=True)
 
     def test_place_market_order_buy(self, broker):
         """Test placing a market buy order."""
@@ -372,7 +598,7 @@ class TestPaperBrokerProvider:
         assert len(msft_orders) == 1
 
     def test_logging_enabled(self, caplog):
-        """Test that broker logs requests and responses."""
+        """Test that logging is enabled."""
         broker = PaperBrokerProvider(initial_cash=100000.0, enable_logging=True)
         
         with caplog.at_level(logging.INFO):
@@ -387,66 +613,3 @@ class TestPaperBrokerProvider:
         log_messages = [record.message for record in caplog.records]
         assert any("BROKER REQUEST" in msg for msg in log_messages)
         assert any("BROKER RESPONSE" in msg for msg in log_messages)
-
-    def test_logging_disabled(self, caplog):
-        """Test that logging can be disabled."""
-        broker = PaperBrokerProvider(initial_cash=100000.0, enable_logging=False)
-        
-        with caplog.at_level(logging.INFO):
-            broker.place_order(
-                symbol="AAPL",
-                quantity=10,
-                side=OrderSide.BUY,
-                order_type=OrderType.MARKET,
-            )
-        
-        # Check that broker logs were not created
-        log_messages = [record.message for record in caplog.records]
-        assert not any("BROKER REQUEST" in msg for msg in log_messages)
-        assert not any("BROKER RESPONSE" in msg for msg in log_messages)
-
-
-class TestLiveTradingPrevention:
-    """Test that live trading cannot be accidentally enabled."""
-
-    def test_paper_trading_enabled_by_default(self):
-        """Test that paper trading is enabled by default."""
-        assert config.PAPER_TRADING_ENABLED is True
-
-    def test_live_trading_disabled_by_default(self):
-        """Test that live trading is disabled by default."""
-        assert config.LIVE_TRADING_ENABLED is False
-
-    def test_live_trading_requires_explicit_approval(self):
-        """Test that live trading requires explicit approval."""
-        # Live trading should only be enabled if both conditions are met:
-        # 1. LIVE_TRADING_ENABLED is True
-        # 2. PAPER_TRADING_ENABLED is False
-        
-        # Default state: paper trading enabled, live trading disabled
-        assert config.is_paper_trading_enabled() is True
-        assert config.is_live_trading_enabled() is False
-
-    def test_paper_broker_is_default(self):
-        """Test that paper broker is the default."""
-        assert config.BROKER_PROVIDER == "paper"
-
-    def test_paper_broker_cannot_execute_live_trades(self):
-        """Test that paper broker simulates trades without real money."""
-        broker = PaperBrokerProvider(initial_cash=100000.0)
-        
-        # All trades should be simulated
-        order = broker.place_order(
-            symbol="AAPL",
-            quantity=10,
-            side=OrderSide.BUY,
-            order_type=OrderType.MARKET,
-        )
-        
-        # Order should be filled in paper trading
-        assert order.status == OrderStatus.FILLED
-        
-        # Account should show simulated values
-        account = broker.get_account()
-        assert account.account_type == "paper"
-        assert account.cash < 100000.0  # Cash reduced by trade

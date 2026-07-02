@@ -5,7 +5,7 @@ Provides realistic paper trading simulation with comprehensive logging of all re
 
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 import json
 
@@ -18,9 +18,14 @@ from app.core.broker_provider import (
     Position,
     PositionSide,
     Account,
+    OrderPreview,
+    OrderPreviewResult,
 )
 
 logger = logging.getLogger(__name__)
+
+# Preview expiration time in seconds
+PREVIEW_EXPIRATION_SECONDS = 300  # 5 minutes
 
 
 class PaperBrokerProvider(BrokerProvider):
@@ -28,6 +33,7 @@ class PaperBrokerProvider(BrokerProvider):
     
     Simulates broker behavior for paper trading without real money.
     Logs every request and response for audit trail and debugging.
+    Requires order preview and confirmation before execution.
     """
 
     def __init__(
@@ -52,6 +58,7 @@ class PaperBrokerProvider(BrokerProvider):
         self.orders: Dict[str, Order] = {}
         self.positions: Dict[str, Position] = {}
         self.price_cache: Dict[str, float] = {}  # Mock current prices
+        self.previews: Dict[str, OrderPreviewResult] = {}  # Store pending previews
         
         logger.info(
             f"PaperBrokerProvider initialized: account_id={self.account_id}, "
@@ -111,6 +118,209 @@ class PaperBrokerProvider(BrokerProvider):
             import random
             self.price_cache[symbol] = round(random.uniform(50, 500), 2)
         return self.price_cache[symbol]
+
+    def preview_order(
+        self,
+        symbol: str,
+        quantity: int,
+        side: OrderSide,
+        strategy_type: str,
+        contracts: Optional[List[Dict]] = None,
+        max_loss: float = 0.0,
+        max_profit: Optional[float] = None,
+        breakeven: Optional[float] = None,
+        reason: str = "",
+        order_type: OrderType = OrderType.MARKET,
+        price: Optional[float] = None,
+        stop_price: Optional[float] = None,
+    ) -> OrderPreviewResult:
+        """Preview an order before execution.
+        
+        Args:
+            symbol: Stock ticker symbol
+            quantity: Number of shares/contracts
+            side: OrderSide.BUY or OrderSide.SELL
+            strategy_type: Name of the strategy
+            contracts: Optional list of option contracts
+            max_loss: Maximum loss estimate
+            max_profit: Maximum profit estimate
+            breakeven: Breakeven price
+            reason: Explanation for the trade
+            order_type: Type of order
+            price: Limit price if applicable
+            stop_price: Stop price if applicable
+            
+        Returns:
+            OrderPreviewResult with preview details
+        """
+        # Validate parameters
+        if quantity <= 0:
+            error_msg = f"Invalid quantity: {quantity}"
+            self._log_error("preview_order", error_msg)
+            raise ValueError(error_msg)
+        
+        if not symbol or not isinstance(symbol, str):
+            error_msg = f"Invalid symbol: {symbol}"
+            self._log_error("preview_order", error_msg)
+            raise ValueError(error_msg)
+        
+        # Log request
+        self._log_request(
+            "preview_order",
+            {
+                "symbol": symbol,
+                "quantity": quantity,
+                "side": side.value,
+                "strategy_type": strategy_type,
+                "max_loss": max_loss,
+                "max_profit": max_profit,
+                "reason": reason,
+            },
+        )
+        
+        # Generate preview ID
+        preview_id = str(uuid.uuid4())
+        now = datetime.utcnow()
+        
+        # Create preview
+        preview = OrderPreview(
+            preview_id=preview_id,
+            symbol=symbol,
+            strategy_type=strategy_type,
+            contracts=contracts or [],
+            quantity=quantity,
+            side=side,
+            order_type=order_type,
+            price=price,
+            max_loss=max_loss,
+            max_profit=max_profit,
+            breakeven=breakeven,
+            reason=reason,
+            created_at=now,
+            expires_at=now + timedelta(seconds=PREVIEW_EXPIRATION_SECONDS),
+        )
+        
+        # Create result
+        result = OrderPreviewResult(
+            preview_id=preview_id,
+            status="pending",
+            preview=preview,
+            message=f"Order preview created. Review details and confirm to execute.",
+            created_at=now,
+        )
+        
+        # Store preview
+        self.previews[preview_id] = result
+        
+        # Log response
+        self._log_response(
+            "preview_order",
+            {
+                "preview_id": preview_id,
+                "status": "pending",
+                "expires_at": preview.expires_at.isoformat(),
+            },
+        )
+        
+        return result
+
+    def confirm_preview(self, preview_id: str) -> Order:
+        """Confirm a preview and execute the order.
+        
+        Args:
+            preview_id: ID of the preview to confirm
+            
+        Returns:
+            Order object
+            
+        Raises:
+            ValueError: If preview_id is invalid or expired
+        """
+        # Log request
+        self._log_request("confirm_preview", {"preview_id": preview_id})
+        
+        # Find preview
+        if preview_id not in self.previews:
+            error_msg = f"Preview not found: {preview_id}"
+            self._log_error("confirm_preview", error_msg)
+            raise ValueError(error_msg)
+        
+        preview_result = self.previews[preview_id]
+        preview = preview_result.preview
+        
+        # Check if preview is expired
+        if datetime.utcnow() > preview.expires_at:
+            error_msg = f"Preview expired: {preview_id}"
+            self._log_error("confirm_preview", error_msg)
+            preview_result.status = "expired"
+            raise ValueError(error_msg)
+        
+        # Check if already confirmed
+        if preview_result.status != "pending":
+            error_msg = f"Preview already {preview_result.status}: {preview_id}"
+            self._log_error("confirm_preview", error_msg)
+            raise ValueError(error_msg)
+        
+        # Mark as confirmed
+        preview_result.status = "confirmed"
+        preview_result.confirmed_at = datetime.utcnow()
+        
+        # Execute the order
+        order = self.place_order(
+            symbol=preview.symbol,
+            quantity=preview.quantity,
+            side=preview.side,
+            order_type=preview.order_type,
+            price=preview.price,
+            stop_price=None,  # stop_price not stored in preview
+        )
+        
+        # Log response
+        self._log_response(
+            "confirm_preview",
+            {
+                "preview_id": preview_id,
+                "order_id": order.order_id,
+                "status": order.status.value,
+            },
+        )
+        
+        return order
+
+    def cancel_preview(self, preview_id: str) -> OrderPreviewResult:
+        """Cancel a preview without executing the order.
+        
+        Args:
+            preview_id: ID of the preview to cancel
+            
+        Returns:
+            OrderPreviewResult with cancelled status
+            
+        Raises:
+            ValueError: If preview_id is invalid
+        """
+        # Log request
+        self._log_request("cancel_preview", {"preview_id": preview_id})
+        
+        # Find preview
+        if preview_id not in self.previews:
+            error_msg = f"Preview not found: {preview_id}"
+            self._log_error("cancel_preview", error_msg)
+            raise ValueError(error_msg)
+        
+        preview_result = self.previews[preview_id]
+        
+        # Cancel preview
+        preview_result.status = "cancelled"
+        preview_result.message = "Preview cancelled by user."
+        
+        # Log response
+        self._log_response(
+            "cancel_preview",
+            {"preview_id": preview_id, "status": "cancelled"},
+        )
+        
+        return preview_result
 
     def place_order(
         self,
@@ -382,7 +592,7 @@ class PaperBrokerProvider(BrokerProvider):
         """Get orders with optional filtering.
         
         Args:
-            status: Optional filter by status
+            status: Optional filter by order status
             symbol: Optional filter by symbol
             
         Returns:
@@ -396,16 +606,18 @@ class PaperBrokerProvider(BrokerProvider):
         
         orders = list(self.orders.values())
         
-        if status:
+        # Filter by status
+        if status is not None:
             orders = [o for o in orders if o.status == status]
         
-        if symbol:
+        # Filter by symbol
+        if symbol is not None:
             orders = [o for o in orders if o.symbol == symbol]
         
         # Log response
         self._log_response(
             "get_orders",
-            {"count": len(orders), "filters": {"status": status, "symbol": symbol}},
+            {"count": len(orders), "symbols": list(set(o.symbol for o in orders))},
         )
         
         return orders
@@ -420,7 +632,7 @@ class PaperBrokerProvider(BrokerProvider):
         """Update position after order fill.
         
         Args:
-            symbol: Stock ticker symbol
+            symbol: Stock symbol
             quantity: Number of shares
             side: BUY or SELL
             price: Fill price
@@ -434,41 +646,34 @@ class PaperBrokerProvider(BrokerProvider):
                 entry_price=price,
                 current_price=price,
                 market_value=quantity * price,
-                unrealized_pl=0,
-                unrealized_pl_pct=0,
+                unrealized_pl=0.0,
+                unrealized_pl_pct=0.0,
                 updated_at=datetime.utcnow(),
             )
         else:
             # Update existing position
-            pos = self.positions[symbol]
+            position = self.positions[symbol]
             if side == OrderSide.BUY:
-                pos.quantity += quantity
+                position.quantity += quantity
             else:
-                pos.quantity -= quantity
-            
-            # Update entry price (weighted average)
-            if pos.quantity != 0:
-                pos.entry_price = (
-                    (pos.entry_price * (pos.quantity - quantity) + price * quantity)
-                    / pos.quantity
-                )
-            
-            pos.updated_at = datetime.utcnow()
-            
-            # Remove position if quantity is 0
-            if pos.quantity == 0:
-                del self.positions[symbol]
+                position.quantity -= quantity
+            position.updated_at = datetime.utcnow()
 
-    def _update_cash(self, quantity: int, side: OrderSide, price: float) -> None:
-        """Update cash after order fill.
+    def _update_cash(
+        self,
+        quantity: int,
+        side: OrderSide,
+        price: float,
+    ) -> None:
+        """Update cash balance after order fill.
         
         Args:
             quantity: Number of shares
             side: BUY or SELL
             price: Fill price
         """
-        amount = quantity * price
+        cost = quantity * price
         if side == OrderSide.BUY:
-            self.cash -= amount
+            self.cash -= cost
         else:
-            self.cash += amount
+            self.cash += cost
