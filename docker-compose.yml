@@ -1,8 +1,7 @@
-version: '3.8'
-
 services:
   postgres:
     image: postgres:15-alpine
+    container_name: options_tracker_postgres
     environment:
       POSTGRES_USER: options_user
       POSTGRES_PASSWORD: options_password
@@ -19,6 +18,7 @@ services:
 
   redis:
     image: redis:7-alpine
+    container_name: options_tracker_redis
     ports:
       - "6379:6379"
     healthcheck:
@@ -28,18 +28,21 @@ services:
       retries: 5
 
   app:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: options_tracker_app
     command: uvicorn app.core.main:app --host 0.0.0.0 --port 8000 --reload
-    environment:
-      ENVIRONMENT: dev
-      DATABASE_URL: postgresql://options_user:options_password@postgres:5432/options_tracker
-      REDIS_URL: redis://redis:6379/0
-      CELERY_BROKER_URL: redis://redis:6379/1
-      CELERY_RESULT_BACKEND: redis://redis:6379/2
-      DEBUG: "True"
-      LOG_LEVEL: INFO
     ports:
       - "8000:8000"
+    environment:
+      ENVIRONMENT: dev
+      DEBUG: "True"
+      DATABASE_URL: postgresql://options_user:options_password@postgres:5432/options_tracker
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      DATA_PROVIDER: mock
     depends_on:
       postgres:
         condition: service_healthy
@@ -47,48 +50,35 @@ services:
         condition: service_healthy
     volumes:
       - .:/app
+    networks:
+      - options_network
 
   celery_worker:
-    build: .
-    command: celery -A app.workers.celery_app worker --loglevel=info --queues=data_fetching,signal_generation,trade_monitoring,celery
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: options_tracker_celery_worker
+    command: celery -A app.workers.celery_app worker --loglevel=info
     environment:
       ENVIRONMENT: dev
+      DEBUG: "True"
       DATABASE_URL: postgresql://options_user:options_password@postgres:5432/options_tracker
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/1
       CELERY_RESULT_BACKEND: redis://redis:6379/2
-      DEBUG: "True"
-      LOG_LEVEL: INFO
+      DATA_PROVIDER: mock
     depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      app:
-        condition: service_started
+      - postgres
+      - redis
+      - app
     volumes:
       - .:/app
-
-  celery_beat:
-    build: .
-    command: celery -A app.workers.celery_app beat --loglevel=info
-    environment:
-      ENVIRONMENT: dev
-      DATABASE_URL: postgresql://options_user:options_password@postgres:5432/options_tracker
-      REDIS_URL: redis://redis:6379/0
-      CELERY_BROKER_URL: redis://redis:6379/1
-      CELERY_RESULT_BACKEND: redis://redis:6379/2
-      DEBUG: "True"
-      LOG_LEVEL: INFO
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      app:
-        condition: service_started
-    volumes:
-      - .:/app
+    networks:
+      - options_network
 
 volumes:
   postgres_data:
+
+networks:
+  options_network:
+    driver: bridge
