@@ -26,6 +26,16 @@ class EventType(Enum):
     MACRO_EVENT = "macro_event"
 
 
+class ExitRuleType(Enum):
+    """Types of exit rules for trades."""
+    PROFIT_TARGET = "profit_target"
+    STOP_LOSS = "stop_loss"
+    TIME_BASED = "time_based"
+    EARNINGS_EXIT = "earnings_exit"
+    EXPIRATION_EXIT = "expiration_exit"
+    TRAILING_STOP = "trailing_stop"
+
+
 class RejectionReason(Enum):
     """Reasons for rejecting an option contract."""
     EXPIRED = "expired"
@@ -48,6 +58,16 @@ class RejectionReason(Enum):
     SCORE_TOO_LOW = "score_too_low"
     LIQUIDITY_SCORE_TOO_LOW = "liquidity_score_too_low"
     NO_SAFE_OPPORTUNITY = "no_safe_opportunity"
+    NO_EXIT_PLAN = "no_exit_plan"
+
+
+@dataclass
+class ExitRule:
+    """Represents an exit rule for a trade."""
+    rule_type: ExitRuleType
+    trigger_value: float  # Price level, percentage, or days depending on rule_type
+    description: str  # Human-readable description of the exit rule
+    is_mandatory: bool = True  # Whether this rule must be enforced
 
 
 @dataclass
@@ -73,17 +93,20 @@ class OptionContract:
     ask_size: Optional[int] = None
     earnings_date: Optional[str] = None
     event_risks: Optional[List[Tuple[EventType, str]]] = None  # List of (event_type, description)
+    liquidity_score: Optional[float] = None
 
 
 @dataclass
 class ScoredOption:
     """Represents an option contract with analysis scores."""
     contract: OptionContract
-    greeks_score: float
-    volatility_score: float
-    pricing_score: float
-    overall_score: float
+    greeks_score: float = 0.0
+    volatility_score: float = 0.0
+    pricing_score: float = 0.0
+    overall_score: float = 0.0
     analysis_details: Dict[str, Any] = field(default_factory=dict)
+    score: Optional[float] = None
+    liquidity_score: Optional[float] = None
 
 
 @dataclass
@@ -182,11 +205,6 @@ class EventRiskAnalyzer:
         if not events:
             return True, None
         
-        # Define event risk thresholds by risk level
-        # LOW: no high-impact events allowed, restrict earnings/FDA/SEC
-        # MEDIUM: restrict high-impact events within 30 days
-        # HIGH: allow most events but warn on critical ones
-        
         high_impact_events = {
             EventType.EARNINGS,
             EventType.FDA_DECISION,
@@ -200,20 +218,16 @@ class EventRiskAnalyzer:
         }
         
         for event_type, description in events:
-            # Critical events always rejected for LOW risk
             if risk_level == RiskLevel.LOW and event_type in critical_events:
                 return False, f"Critical event detected: {description}"
             
-            # High-impact events rejected for LOW risk
             if risk_level == RiskLevel.LOW and event_type in high_impact_events:
                 return False, f"High-impact event detected: {description}"
             
-            # For MEDIUM risk, restrict high-impact events within 30 days
             if risk_level == RiskLevel.MEDIUM and event_type in high_impact_events:
                 if days_to_expiration and days_to_expiration <= 30:
                     return False, f"High-impact event too close to expiration: {description}"
             
-            # For HIGH risk, only reject critical events within 7 days
             if risk_level == RiskLevel.HIGH and event_type in critical_events:
                 if days_to_expiration and days_to_expiration <= 7:
                     return False, f"Critical event too close to expiration: {description}"
@@ -251,7 +265,6 @@ class VolatilityAnalyzer:
         variance = sum((r - mean_return) ** 2 for r in returns) / len(returns)
         std_dev = math.sqrt(variance)
         
-        # Annualize (assuming daily returns)
         hv = std_dev * math.sqrt(252)
         return hv
 
@@ -297,7 +310,6 @@ class VolatilityAnalyzer:
         if contract.implied_volatility is None:
             return acceptable, warnings
         
-        # Define IV thresholds by risk level
         iv_thresholds = {
             RiskLevel.LOW: 0.30,
             RiskLevel.MEDIUM: 0.50,
@@ -329,147 +341,309 @@ class GreeksAnalyzer:
         greeks = {}
         
         if contract.delta is not None:
-            greeks["delta"] = contract.delta
-            greeks["delta_abs"] = abs(contract.delta)
-        
+            greeks["delta"] = abs(contract.delta)
         if contract.gamma is not None:
-            greeks["gamma"] = contract.gamma
-        
+            greeks["gamma"] = abs(contract.gamma)
         if contract.theta is not None:
-            greeks["theta"] = contract.theta
-        
+            greeks["theta"] = abs(contract.theta)
         if contract.vega is not None:
-            greeks["vega"] = contract.vega
+            greeks["vega"] = abs(contract.vega)
         
         return greeks
 
 
-class RiskConfig:
-    """Risk configuration for a specific risk level."""
-    
-    def __init__(self, risk_level: RiskLevel):
-        """Initialize risk config for a risk level.
+class ExitRuleValidator:
+    """Validates exit rules for trades."""
+
+    @staticmethod
+    def validate_exit_rules(exit_rules: Optional[List[ExitRule]]) -> Tuple[bool, Optional[str]]:
+        """Validate that exit rules are defined and valid.
         
         Args:
-            risk_level: Risk level (LOW, MEDIUM, HIGH)
+            exit_rules: List of exit rules to validate
+            
+        Returns:
+            Tuple of (valid, error_message)
         """
-        self.risk_level = risk_level
+        if not exit_rules:
+            return False, "No exit plan defined. Every trade needs exit logic before entry."
         
-        # Define thresholds by risk level
-        if risk_level == RiskLevel.LOW:
-            self.max_loss_per_trade_pct = 1.0
-            self.max_daily_loss_pct = 3.0
-            self.max_open_positions = 5
-            self.max_contracts_per_trade = 2
-            self.min_liquidity_score = 60.0
-            self.min_signal_score = 60.0
-        elif risk_level == RiskLevel.HIGH:
-            self.max_loss_per_trade_pct = 5.0
-            self.max_daily_loss_pct = 15.0
-            self.max_open_positions = 20
-            self.max_contracts_per_trade = 10
-            self.min_liquidity_score = 30.0
-            self.min_signal_score = 40.0
-        else:  # MEDIUM
-            self.max_loss_per_trade_pct = 2.5
-            self.max_daily_loss_pct = 7.5
-            self.max_open_positions = 10
-            self.max_contracts_per_trade = 5
-            self.min_liquidity_score = 40.0
-            self.min_signal_score = 50.0
-
-
-def get_risk_config(risk_level: RiskLevel) -> RiskConfig:
-    """Get risk configuration for a risk level.
-    
-    Args:
-        risk_level: Risk level
+        mandatory_rules = [r for r in exit_rules if r.is_mandatory]
+        if not mandatory_rules:
+            return False, "No mandatory exit rules defined."
         
-    Returns:
-        RiskConfig instance
-    """
-    return RiskConfig(risk_level)
+        # Validate that at least one of each critical rule type exists
+        rule_types = {r.rule_type for r in mandatory_rules}
+        
+        # At minimum, need either profit target or stop loss
+        has_profit_or_loss = (
+            ExitRuleType.PROFIT_TARGET in rule_types or
+            ExitRuleType.STOP_LOSS in rule_types
+        )
+        
+        if not has_profit_or_loss:
+            return False, "Exit plan must include either profit target or stop loss."
+        
+        # Validate trigger values are positive
+        for rule in mandatory_rules:
+            if rule.trigger_value <= 0:
+                return False, f"Exit rule {rule.rule_type.value} has invalid trigger value: {rule.trigger_value}"
+        
+        return True, None
+
+    @staticmethod
+    def generate_default_exit_rules(
+        entry_price: float,
+        max_loss: float,
+        expected_profit: float,
+        days_to_expiration: int,
+        risk_level: RiskLevel,
+    ) -> List[ExitRule]:
+        """Generate default exit rules based on trade parameters.
+        
+        Args:
+            entry_price: Entry price of the trade
+            max_loss: Maximum loss in dollars
+            expected_profit: Expected profit in dollars
+            days_to_expiration: Days until option expiration
+            risk_level: User's risk level
+            
+        Returns:
+            List of default exit rules
+        """
+        rules = []
+        
+        # Stop loss: at max_loss level
+        stop_loss_price = entry_price - max_loss
+        rules.append(ExitRule(
+            rule_type=ExitRuleType.STOP_LOSS,
+            trigger_value=stop_loss_price,
+            description=f"Stop loss at ${stop_loss_price:.2f} (max loss: ${max_loss:.2f})",
+            is_mandatory=True,
+        ))
+        
+        # Profit target: at expected_profit level
+        profit_target_price = entry_price + expected_profit
+        rules.append(ExitRule(
+            rule_type=ExitRuleType.PROFIT_TARGET,
+            trigger_value=profit_target_price,
+            description=f"Profit target at ${profit_target_price:.2f} (expected profit: ${expected_profit:.2f})",
+            is_mandatory=True,
+        ))
+        
+        # Time-based exit: exit at 50% of DTE
+        exit_dte = max(1, days_to_expiration // 2)
+        rules.append(ExitRule(
+            rule_type=ExitRuleType.TIME_BASED,
+            trigger_value=float(exit_dte),
+            description=f"Exit if {exit_dte} days remain to expiration",
+            is_mandatory=False,
+        ))
+        
+        # Expiration exit: always exit at expiration
+        rules.append(ExitRule(
+            rule_type=ExitRuleType.EXPIRATION_EXIT,
+            trigger_value=float(days_to_expiration),
+            description=f"Exit at expiration ({days_to_expiration} days)",
+            is_mandatory=True,
+        ))
+        
+        # Trailing stop for high-risk profiles
+        if risk_level == RiskLevel.HIGH:
+            trailing_stop_pct = 0.10  # 10% trailing stop
+            rules.append(ExitRule(
+                rule_type=ExitRuleType.TRAILING_STOP,
+                trigger_value=trailing_stop_pct,
+                description=f"Trailing stop at {trailing_stop_pct:.1%} of peak profit",
+                is_mandatory=False,
+            ))
+        
+        return rules
 
 
 class RiskEngine:
-    """Validates trades against risk guardrails."""
-    
+    """Risk management engine for validating trades against guardrails."""
+
     def __init__(self, risk_level: RiskLevel = RiskLevel.MEDIUM):
         """Initialize risk engine.
         
         Args:
-            risk_level: User's risk level
+            risk_level: Risk level for this engine
         """
         self.risk_level = risk_level
-        self.config = get_risk_config(risk_level)
+        self.risk_config = self._get_risk_config(risk_level)
+
+    def _get_risk_config(self, risk_level: RiskLevel) -> Dict[str, Any]:
+        """Get risk configuration for risk level.
+        
+        Args:
+            risk_level: Risk level
+            
+        Returns:
+            Dict of risk parameters
+        """
+        configs = {
+            RiskLevel.LOW: {
+                "max_loss_pct": 2.0,
+                "max_contracts": 5,
+                "max_daily_loss_pct": 3.0,
+                "max_open_positions": 5,
+                "max_bid_ask_spread_pct": 0.05,
+                "min_volume": 50,
+                "min_open_interest": 100,
+                "earnings_buffer_days": 5,
+            },
+            RiskLevel.MEDIUM: {
+                "max_loss_pct": 5.0,
+                "max_contracts": 10,
+                "max_daily_loss_pct": 5.0,
+                "max_open_positions": 10,
+                "max_bid_ask_spread_pct": 0.10,
+                "min_volume": 20,
+                "min_open_interest": 50,
+                "earnings_buffer_days": 3,
+            },
+            RiskLevel.HIGH: {
+                "max_loss_pct": 10.0,
+                "max_contracts": 20,
+                "max_daily_loss_pct": 10.0,
+                "max_open_positions": 20,
+                "max_bid_ask_spread_pct": 0.15,
+                "min_volume": 10,
+                "min_open_interest": 20,
+                "earnings_buffer_days": 1,
+            },
+        }
+        return configs.get(risk_level, configs[RiskLevel.MEDIUM])
 
     def validate_trade(
         self,
         contract: OptionContract,
         max_loss_pct: float,
-        num_contracts: int = 1,
+        num_contracts: int,
         current_daily_loss_pct: float = 0.0,
         current_open_positions: int = 0,
         is_live_trading: bool = False,
         user_approved_live_trading: bool = False,
+        exit_rules: Optional[List[ExitRule]] = None,
     ) -> RiskGuardrailResult:
-        """Validate a trade against all guardrails.
+        """Validate a trade against all risk guardrails.
         
         Args:
-            contract: The OptionContract to validate.
-            max_loss_pct: Maximum loss for this trade as % of portfolio.
-            num_contracts: Number of contracts to trade.
-            current_daily_loss_pct: Current daily loss as % of portfolio.
-            current_open_positions: Current number of open positions.
-            is_live_trading: Whether this is a live trade (vs paper trade).
-            user_approved_live_trading: Whether user has approved live trading.
-        
+            contract: Option contract to validate
+            max_loss_pct: Maximum loss as percentage
+            num_contracts: Number of contracts
+            current_daily_loss_pct: Current daily loss percentage
+            current_open_positions: Current number of open positions
+            is_live_trading: Whether this is a live trade
+            user_approved_live_trading: Whether user approved live trading
+            exit_rules: Exit rules for the trade
+            
         Returns:
-            RiskGuardrailResult with passed status and human-readable message.
+            RiskGuardrailResult with pass/fail and reason
         """
+        # Check exit rules first
+        if exit_rules is None or len(exit_rules) == 0:
+            return RiskGuardrailResult(
+                passed=False,
+                reason=RejectionReason.NO_EXIT_PLAN,
+                message="No exit plan defined. Every trade needs exit logic before entry.",
+            )
+        
+        exit_valid, exit_msg = ExitRuleValidator.validate_exit_rules(exit_rules)
+        if not exit_valid:
+            return RiskGuardrailResult(
+                passed=False,
+                reason=RejectionReason.NO_EXIT_PLAN,
+                message=exit_msg or "Invalid exit plan.",
+            )
+        
         # Check max loss per trade
-        if max_loss_pct > self.config.max_loss_per_trade_pct:
+        if max_loss_pct > self.risk_config["max_loss_pct"]:
             return RiskGuardrailResult(
                 passed=False,
                 reason=RejectionReason.MAX_LOSS_EXCEEDED,
-                message=f"Max loss {max_loss_pct:.2f}% exceeds limit of {self.config.max_loss_per_trade_pct:.2f}%",
-            )
-        
-        # Check max daily loss
-        if current_daily_loss_pct + max_loss_pct > self.config.max_daily_loss_pct:
-            return RiskGuardrailResult(
-                passed=False,
-                reason=RejectionReason.MAX_DAILY_LOSS_EXCEEDED,
-                message=f"Daily loss would be {current_daily_loss_pct + max_loss_pct:.2f}%, exceeds limit of {self.config.max_daily_loss_pct:.2f}%",
+                message=f"Max loss {max_loss_pct:.2f}% exceeds {self.risk_level.value} limit of {self.risk_config['max_loss_pct']:.2f}%",
             )
         
         # Check max contracts per trade
-        if num_contracts > self.config.max_contracts_per_trade:
+        if num_contracts > self.risk_config["max_contracts"]:
             return RiskGuardrailResult(
                 passed=False,
                 reason=RejectionReason.MAX_CONTRACTS_EXCEEDED,
-                message=f"Number of contracts {num_contracts} exceeds limit of {self.config.max_contracts_per_trade}",
+                message=f"Contracts {num_contracts} exceeds {self.risk_level.value} limit of {self.risk_config['max_contracts']}",
+            )
+        
+        # Check max daily loss
+        total_daily_loss = current_daily_loss_pct + max_loss_pct
+        if total_daily_loss > self.risk_config["max_daily_loss_pct"]:
+            return RiskGuardrailResult(
+                passed=False,
+                reason=RejectionReason.MAX_DAILY_LOSS_EXCEEDED,
+                message=f"Total daily loss {total_daily_loss:.2f}% exceeds {self.risk_level.value} limit of {self.risk_config['max_daily_loss_pct']:.2f}%",
             )
         
         # Check max open positions
-        if current_open_positions + 1 > self.config.max_open_positions:
+        if current_open_positions >= self.risk_config["max_open_positions"]:
             return RiskGuardrailResult(
                 passed=False,
                 reason=RejectionReason.MAX_OPEN_POSITIONS_EXCEEDED,
-                message=f"Open positions would be {current_open_positions + 1}, exceeds limit of {self.config.max_open_positions}",
+                message=f"Open positions {current_open_positions} at {self.risk_level.value} limit of {self.risk_config['max_open_positions']}",
             )
+        
+        # Check bid-ask spread
+        if contract.bid and contract.ask:
+            mid_price = (contract.bid + contract.ask) / 2
+            spread_pct = (contract.ask - contract.bid) / mid_price if mid_price > 0 else 1.0
+            if spread_pct > self.risk_config["max_bid_ask_spread_pct"]:
+                return RiskGuardrailResult(
+                    passed=False,
+                    reason=RejectionReason.BID_ASK_SPREAD_TOO_WIDE,
+                    message=f"Bid-ask spread {spread_pct:.2%} exceeds {self.risk_level.value} limit of {self.risk_config['max_bid_ask_spread_pct']:.2%}",
+                )
+        
+        # Check volume
+        if (contract.volume or 0) < self.risk_config["min_volume"]:
+            return RiskGuardrailResult(
+                passed=False,
+                reason=RejectionReason.VOLUME_TOO_LOW,
+                message=f"Volume {contract.volume or 0} below {self.risk_level.value} minimum of {self.risk_config['min_volume']}",
+            )
+        
+        # Check open interest
+        if (contract.open_interest or 0) < self.risk_config["min_open_interest"]:
+            return RiskGuardrailResult(
+                passed=False,
+                reason=RejectionReason.OPEN_INTEREST_TOO_LOW,
+                message=f"Open interest {contract.open_interest or 0} below {self.risk_level.value} minimum of {self.risk_config['min_open_interest']}",
+            )
+        
+        # Check earnings window
+        if contract.earnings_date:
+            try:
+                earnings_dt = datetime.strptime(contract.earnings_date, "%Y-%m-%d")
+                days_to_earnings = (earnings_dt - datetime.now()).days
+                buffer = self.risk_config["earnings_buffer_days"]
+                if -buffer <= days_to_earnings <= buffer:
+                    return RiskGuardrailResult(
+                        passed=False,
+                        reason=RejectionReason.EARNINGS_WINDOW_RESTRICTED,
+                        message=f"Earnings on {contract.earnings_date} within {buffer}-day buffer",
+                    )
+            except (ValueError, TypeError):
+                pass
         
         # Check live trading approval
         if is_live_trading and not user_approved_live_trading:
             return RiskGuardrailResult(
                 passed=False,
                 reason=RejectionReason.LIVE_TRADING_NOT_APPROVED,
-                message="Live trading not approved by user",
+                message="Live trading is disabled by default. User approval required.",
             )
         
         # Check event risk
         if contract.event_risks:
-            acceptable, reason = EventRiskAnalyzer.assess_event_risk(
+            acceptable, reason_msg = EventRiskAnalyzer.assess_event_risk(
                 contract.event_risks,
                 self.risk_level,
                 contract.days_to_expiration,
@@ -478,39 +652,7 @@ class RiskEngine:
                 return RiskGuardrailResult(
                     passed=False,
                     reason=RejectionReason.EVENT_RISK_TOO_HIGH,
-                    message=reason or "Event risk too high",
+                    message=reason_msg or "Event risk too high",
                 )
         
-        return RiskGuardrailResult(passed=True, message="Trade passed all guardrails")
-
-    def validate_signal_score(
-        self,
-        signal_score: float,
-        liquidity_score: Optional[float] = None,
-    ) -> RiskGuardrailResult:
-        """Validate signal score and liquidity against thresholds.
-        
-        Args:
-            signal_score: Overall signal score (0-100)
-            liquidity_score: Liquidity score (0-100), optional
-            
-        Returns:
-            RiskGuardrailResult with passed status
-        """
-        # Check minimum signal score
-        if signal_score < self.config.min_signal_score:
-            return RiskGuardrailResult(
-                passed=False,
-                reason=RejectionReason.SCORE_TOO_LOW,
-                message=f"Signal score {signal_score:.1f} below minimum of {self.config.min_signal_score:.1f}",
-            )
-        
-        # Check minimum liquidity score
-        if liquidity_score is not None and liquidity_score < self.config.min_liquidity_score:
-            return RiskGuardrailResult(
-                passed=False,
-                reason=RejectionReason.LIQUIDITY_SCORE_TOO_LOW,
-                message=f"Liquidity score {liquidity_score:.1f} below minimum of {self.config.min_liquidity_score:.1f}",
-            )
-        
-        return RiskGuardrailResult(passed=True, message="Signal passed score validation")
+        return RiskGuardrailResult(passed=True)

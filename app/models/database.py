@@ -173,8 +173,8 @@ class Signal(Base):
     
     Stores trading signals with comprehensive analysis including risk assessment,
     profit/loss estimates, strategy information, volatility context, Greeks analysis,
-    and event-risk information. Every signal includes an explanation (reason) and 
-    max-loss estimate as required.
+    event-risk information, and exit rules. Every signal includes an explanation (reason),
+    max-loss estimate, and exit plan as required.
     
     Status can be:
     - pending: Signal generated, awaiting review
@@ -201,6 +201,7 @@ class Signal(Base):
     option_contract_id = Column(Integer, ForeignKey("option_contracts.id"), nullable=True, index=True)  # Optional: linked contract
     breakdown = Column(Text, nullable=True)  # JSON string of factor scores and Greeks summary
     event_risks = Column(Text, nullable=True)  # JSON string of detected event risks
+    exit_rules = Column(Text, nullable=False, default="[]")  # JSON string of exit rules (required)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
@@ -219,8 +220,8 @@ class Trade(Base):
     """Trade execution model for tracking paper and live trades.
     
     Stores trade execution details including entry/exit prices, P/L calculations,
-    and links to signals and broker orders. Every trade is linked to a signal,
-    and P/L can be calculated after the trade is closed.
+    exit rules applied, and links to signals and broker orders. Every trade is linked
+    to a signal, and P/L can be calculated after the trade is closed.
     """
 
     __tablename__ = "trades"
@@ -236,10 +237,11 @@ class Trade(Base):
     exit_price = Column(Float, nullable=True)  # Exit price per contract (null if still open)
     quantity = Column(Integer, nullable=False)  # Number of contracts
     realized_pnl = Column(Float, nullable=True)  # Realized P/L (null if still open)
-    is_paper_trading = Column(Boolean, default=True, nullable=False)  # True for paper, False for live
-    opened_at = Column(DateTime, default=datetime.utcnow, nullable=False)  # When trade was opened
-    closed_at = Column(DateTime, nullable=True)  # When trade was closed (null if still open)
-    error_message = Column(Text, nullable=True)  # Error message if order was rejected
+    exit_rules = Column(Text, nullable=True)  # JSON string of exit rules applied to this trade
+    exit_reason = Column(String(100), nullable=True)  # Reason trade was exited (profit_target, stop_loss, time_based, etc.)
+    is_paper_trading = Column(Boolean, default=True, nullable=False)
+    opened_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    closed_at = Column(DateTime, nullable=True, index=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
@@ -251,47 +253,4 @@ class Trade(Base):
     # Composite index for efficient querying by user and status
     __table_args__ = (
         Index('ix_trades_user_status', 'user_id', 'status'),
-        Index('ix_trades_broker_order_id', 'broker_order_id'),
-    )
-
-
-class BacktestResult(Base):
-    """Backtest result model for storing strategy performance analysis.
-    
-    Stores backtest results including performance metrics, trade statistics,
-    and comparison with paper trading results.
-    """
-
-    __tablename__ = "backtest_results"
-
-    id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
-    strategy_type = Column(String(100), nullable=False)  # e.g., "covered_call"
-    symbol = Column(String(20), nullable=False, index=True)
-    start_date = Column(String(10), nullable=False)  # YYYY-MM-DD
-    end_date = Column(String(10), nullable=False)  # YYYY-MM-DD
-    initial_capital = Column(Float, nullable=False)
-    final_value = Column(Float, nullable=False)
-    total_return_pct = Column(Float, nullable=False)  # Total return as percentage
-    total_trades = Column(Integer, nullable=False)  # Number of trades executed
-    winning_trades = Column(Integer, nullable=False)  # Number of profitable trades
-    losing_trades = Column(Integer, nullable=False)  # Number of losing trades
-    win_rate = Column(Float, nullable=False)  # Win rate as percentage (0-100)
-    avg_win = Column(Float, nullable=False)  # Average winning trade
-    avg_loss = Column(Float, nullable=False)  # Average losing trade
-    max_drawdown_pct = Column(Float, nullable=False)  # Maximum drawdown as percentage
-    sharpe_ratio = Column(Float, nullable=True)  # Sharpe ratio if calculated
-    expected_fill_rate = Column(Float, nullable=True)  # Expected fill rate from backtest (0-1)
-    paper_fill_rate = Column(Float, nullable=True)  # Actual fill rate in paper trading (0-1)
-    paper_slippage = Column(Float, nullable=True)  # Average slippage in paper trading
-    paper_pnl_variance = Column(Float, nullable=True)  # Variance between expected and actual P/L
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
-
-    # Relationships
-    user = relationship("User", back_populates="backtest_results")
-
-    # Composite index for efficient querying by user and strategy
-    __table_args__ = (
-        Index('ix_backtest_results_user_strategy', 'user_id', 'strategy_type'),
     )
