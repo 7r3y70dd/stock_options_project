@@ -106,6 +106,11 @@ class Config:
     DEFAULT_RISK_LEVEL: str = os.getenv("DEFAULT_RISK_LEVEL", "medium")
     MAX_DAILY_LOSS_PCT: float = float(os.getenv("MAX_DAILY_LOSS_PCT", "5.0"))
 
+    # Kill Switch Configuration
+    # Global emergency kill switch to disable new orders
+    KILL_SWITCH_ENABLED: bool = os.getenv("KILL_SWITCH_ENABLED", "False").lower() == "true"
+    KILL_SWITCH_CLOSE_POSITIONS: bool = os.getenv("KILL_SWITCH_CLOSE_POSITIONS", "False").lower() == "true"
+
     # Paper Trading Comparison Configuration
     PAPER_TRADING_COMPARISON_ENABLED: bool = os.getenv("PAPER_TRADING_COMPARISON_ENABLED", "True").lower() == "true"
     PAPER_TRADING_FILL_RATE_THRESHOLD: float = float(os.getenv("PAPER_TRADING_FILL_RATE_THRESHOLD", "0.95"))
@@ -216,28 +221,4 @@ class Config:
     LONG_CALL_PUT_MIN_DELTA: float = float(os.getenv("LONG_CALL_PUT_MIN_DELTA", "0.40"))
     LONG_CALL_PUT_MAX_DELTA: float = float(os.getenv("LONG_CALL_PUT_MAX_DELTA", "0.70"))
     LONG_CALL_PUT_MAX_OTM_THRESHOLD: float = float(os.getenv("LONG_CALL_PUT_MAX_OTM_THRESHOLD", "0.15"))
-    LONG_CALL_PUT_MAX_PREMIUM: float = float(os.getenv("LONG_CALL_PUT_MAX_PREMIUM", "1000.0"))
-
-    # Logging
-    LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
-
-    # Job Scheduling
-    DATA_REFRESH_INTERVAL_SECONDS: int = int(os.getenv("DATA_REFRESH_INTERVAL_SECONDS", "300"))  # 5 minutes
-    SIGNAL_GENERATION_INTERVAL_SECONDS: int = int(os.getenv("SIGNAL_GENERATION_INTERVAL_SECONDS", "600"))  # 10 minutes
-    TRADE_MONITORING_INTERVAL_SECONDS: int = int(os.getenv("TRADE_MONITORING_INTERVAL_SECONDS", "60"))  # 1 minute
-    NEWS_FETCH_INTERVAL_SECONDS: int = int(os.getenv("NEWS_FETCH_INTERVAL_SECONDS", "1800"))  # 30 minutes
-
-    @classmethod
-    def is_dev(cls) -> bool:
-        """Check if running in dev environment."""
-        return cls.ENVIRONMENT == Environment.DEV
-
-    @classmethod
-    def is_test(cls) -> bool:
-        """Check if running in test environment."""
-        return cls.ENVIRONMENT == Environment.TEST
-
-    @classmethod
-    def is_prod(cls) -> bool:
-        """Check if running in prod environment."""
-        return cls.ENVIRONMENT == Environment.PROD
+    LONG_CALL_PUT_MAX_PREMIUM: float = float(os.getenv("LONG_CALL_PUT_MAX_PREMIUM", "500.0"))
