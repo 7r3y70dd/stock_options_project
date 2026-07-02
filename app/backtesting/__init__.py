@@ -1,20 +1,38 @@
-"""Backtesting engine for strategy validation.
+"""Backtesting module for strategy evaluation.
 
-This module provides backtesting capabilities for trading strategies using VectorBT.
-VectorBT is chosen for its vectorized performance, pandas integration, and ability to
-test multiple strategy variations quickly.
-
-Key classes:
-- BacktestEngine: Main backtesting orchestrator
-- BacktestResult: Results from a single backtest run
-- StrategyBacktester: Base class for strategy-specific backtests
+Provides backtesting engine and related utilities.
+Note: vectorbt is lazily imported to avoid initialization errors during test collection.
 """
 
-from app.backtesting.engine import BacktestEngine, BacktestResult
-from app.backtesting.strategy_backtester import StrategyBacktester
+# Lazy imports to avoid requiring vectorbt during test collection
+def __getattr__(name):
+    """Lazy load backtesting components."""
+    if name == "BacktestEngine":
+        from app.backtesting.engine import BacktestEngine
+        return BacktestEngine
+    elif name == "BacktestResult":
+        from app.backtesting.engine import BacktestResult
+        return BacktestResult
+    elif name == "SimulatedTrade":
+        from app.backtesting.engine import SimulatedTrade
+        return SimulatedTrade
+    elif name == "PaperTradingComparison":
+        from app.backtesting.engine import PaperTradingComparison
+        return PaperTradingComparison
+    elif name == "StrategyBacktester":
+        from app.backtesting.strategy_backtester import StrategyBacktester
+        return StrategyBacktester
+    elif name == "CoveredCallBacktester":
+        from app.backtesting.covered_call_backtest import CoveredCallBacktester
+        return CoveredCallBacktester
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 __all__ = [
     "BacktestEngine",
     "BacktestResult",
+    "SimulatedTrade",
+    "PaperTradingComparison",
     "StrategyBacktester",
+    "CoveredCallBacktester",
 ]
