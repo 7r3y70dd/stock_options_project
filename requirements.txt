@@ -13,7 +13,7 @@ numpy==1.26.2
 scipy==1.11.4
 scikit-learn==1.3.2
 quantlib==1.31
-backtrader==1.9.78
+backtrader==1.9.78.123
 vectorbt==0.25.3
 pytest==7.4.3
 pytest-asyncio==0.21.1
