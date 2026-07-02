@@ -218,7 +218,10 @@ class Config:
     LONG_CALL_PUT_MIN_VOLUME: int = int(os.getenv("LONG_CALL_PUT_MIN_VOLUME", "10"))
     LONG_CALL_PUT_MIN_OPEN_INTEREST: int = int(os.getenv("LONG_CALL_PUT_MIN_OPEN_INTEREST", "20"))
     LONG_CALL_PUT_MIN_LIQUIDITY_SCORE: float = float(os.getenv("LONG_CALL_PUT_MIN_LIQUIDITY_SCORE", "50.0"))
-    LONG_CALL_PUT_MIN_DELTA: float = float(os.getenv("LONG_CALL_PUT_MIN_DELTA", "0.40"))
-    LONG_CALL_PUT_MAX_DELTA: float = float(os.getenv("LONG_CALL_PUT_MAX_DELTA", "0.70"))
-    LONG_CALL_PUT_MAX_OTM_THRESHOLD: float = float(os.getenv("LONG_CALL_PUT_MAX_OTM_THRESHOLD", "0.15"))
+    LONG_CALL_PUT_MIN_DELTA: float = float(os.getenv("LONG_CALL_PUT_MIN_DELTA", "0.30"))
+    LONG_CALL_PUT_MAX_DELTA: float = float(os.getenv("LONG_CALL_PUT_MAX_DELTA", "0.90"))
     LONG_CALL_PUT_MAX_PREMIUM: float = float(os.getenv("LONG_CALL_PUT_MAX_PREMIUM", "500.0"))
+
+
+# Global config singleton instance
+config = Config()
