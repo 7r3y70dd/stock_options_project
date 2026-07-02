@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.frontend.dashboard import Dashboard, DashboardData
+from app.frontend.dashboard import Dashboard, DashboardData, SignalDetail
 
 logger = logging.getLogger(__name__)
 
@@ -329,34 +329,187 @@ async def get_top_opportunities(
             "count": len(opportunities),
         }
     except Exception as e:
-        logger.error(f"Error getting opportunities for user {user_id}: {e}", exc_info=True)
+        logger.error(f"Error getting top opportunities for user {user_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to retrieve opportunities")
 
 
-@router.get("/risk-settings", response_model=dict)
-async def get_risk_settings(
+@router.get("/signals/{signal_id}", response_model=dict)
+async def get_signal_detail(
+    signal_id: int,
     user_id: int = Query(..., description="User ID"),
     db: Session = Depends(get_db),
     dashboard: Dashboard = Depends(get_dashboard),
 ) -> dict:
-    """Get user's risk settings.
+    """Get complete signal detail page.
+    
+    Sections:
+    - Strategy summary
+    - Contracts involved
+    - Score breakdown
+    - Max loss
+    - Max profit
+    - Breakeven
+    - News context
+    - Liquidity warning
+    - Greeks
+    - Backtest/paper history
     
     Args:
+        signal_id: Signal ID
         user_id: User ID
         db: Database session
         dashboard: Dashboard service
         
     Returns:
-        Risk settings
+        Complete signal detail data
+        
+    Raises:
+        HTTPException: If signal not found or error occurs
     """
     try:
-        settings = dashboard.get_risk_settings(user_id, db)
+        detail = dashboard.get_signal_detail(user_id, signal_id, db)
+        
+        if not detail:
+            raise HTTPException(status_code=404, detail="Signal not found")
+        
         return {
-            "risk_level": settings.risk_level,
-            "paper_trading_enabled": settings.paper_trading_enabled,
-            "live_trading_enabled": settings.live_trading_enabled,
-            "live_trading_approved": settings.live_trading_approved,
+            "signal_id": detail.signal_id,
+            "symbol": detail.symbol,
+            "strategy_type": detail.strategy_type,
+            "risk_level": detail.risk_level,
+            "score": detail.score,
+            "expected_profit": detail.expected_profit,
+            "max_loss": detail.max_loss,
+            "probability_estimate": detail.probability_estimate,
+            "reason": detail.reason,
+            "status": detail.status,
+            "created_at": detail.created_at.isoformat(),
+            "updated_at": detail.updated_at.isoformat(),
+            "breakdown": detail.breakdown,
+            "contracts": [
+                {
+                    "contract_id": c.contract_id,
+                    "symbol": c.symbol,
+                    "expiration": c.expiration,
+                    "strike": c.strike,
+                    "contract_type": c.contract_type,
+                    "bid": c.bid,
+                    "ask": c.ask,
+                    "volume": c.volume,
+                    "open_interest": c.open_interest,
+                    "implied_volatility": c.implied_volatility,
+                    "delta": c.delta,
+                    "gamma": c.gamma,
+                    "theta": c.theta,
+                    "vega": c.vega,
+                    "underlying_price": c.underlying_price,
+                    "days_to_expiration": c.days_to_expiration,
+                    "liquidity_score": c.liquidity_score,
+                }
+                for c in detail.contracts
+            ],
+            "event_risks": detail.event_risks,
+            "exit_rules": detail.exit_rules,
+            "related_news": [
+                {
+                    "article_id": n.article_id,
+                    "symbol": n.symbol,
+                    "title": n.title,
+                    "description": n.description,
+                    "url": n.url,
+                    "source": n.source,
+                    "published_at": n.published_at.isoformat() if n.published_at else None,
+                    "sentiment": n.sentiment,
+                    "sentiment_score": n.sentiment_score,
+                    "event_type": n.event_type,
+                }
+                for n in detail.related_news
+            ],
+            "related_trades": [
+                {
+                    "trade_id": t.trade_id,
+                    "symbol": t.symbol,
+                    "strategy_type": t.strategy_type,
+                    "entry_price": t.entry_price,
+                    "current_price": t.current_price,
+                    "quantity": t.quantity,
+                    "entry_date": t.entry_date.isoformat(),
+                    "current_pl": t.current_pl,
+                    "current_pl_pct": t.current_pl_pct,
+                    "status": t.status,
+                }
+                for t in detail.related_trades
+            ],
+            "greeks_summary": detail.greeks_summary,
         }
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Error getting risk settings for user {user_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to retrieve risk settings")
+        logger.error(f"Error getting signal detail for signal {signal_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to retrieve signal detail")
+
+
+@router.post("/signals/{signal_id}/approve", response_model=dict)
+async def approve_signal(
+    signal_id: int,
+    user_id: int = Query(..., description="User ID"),
+    db: Session = Depends(get_db),
+    dashboard: Dashboard = Depends(get_dashboard),
+) -> dict:
+    """Approve a signal for trading.
+    
+    Args:
+        signal_id: Signal ID
+        user_id: User ID
+        db: Database session
+        dashboard: Dashboard service
+        
+    Returns:
+        Result of approval
+        
+    Raises:
+        HTTPException: If signal not found or error occurs
+    """
+    try:
+        result = dashboard.approve_signal(user_id, signal_id, db)
+        if result["status"] == "error":
+            raise HTTPException(status_code=400, detail=result["message"])
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error approving signal {signal_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to approve signal")
+
+
+@router.post("/signals/{signal_id}/reject", response_model=dict)
+async def reject_signal(
+    signal_id: int,
+    user_id: int = Query(..., description="User ID"),
+    db: Session = Depends(get_db),
+    dashboard: Dashboard = Depends(get_dashboard),
+) -> dict:
+    """Reject a signal.
+    
+    Args:
+        signal_id: Signal ID
+        user_id: User ID
+        db: Database session
+        dashboard: Dashboard service
+        
+    Returns:
+        Result of rejection
+        
+    Raises:
+        HTTPException: If signal not found or error occurs
+    """
+    try:
+        result = dashboard.reject_signal(user_id, signal_id, db)
+        if result["status"] == "error":
+            raise HTTPException(status_code=400, detail=result["message"])
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error rejecting signal {signal_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to reject signal")
