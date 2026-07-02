@@ -46,10 +46,12 @@ class PortfolioSummary:
 
 @dataclass
 class WatchlistItem:
-    """Watchlist item with current price."""
+    """Watchlist item with current price and data freshness."""
     symbol: str
     current_price: Optional[float]
     added_at: datetime
+    last_updated: Optional[datetime] = None  # When price was last fetched
+    data_freshness_seconds: Optional[int] = None  # How old the price data is
 
 
 @dataclass
@@ -239,6 +241,8 @@ class Dashboard:
                     symbol=symbol.symbol,
                     current_price=None,  # Would be fetched from data provider
                     added_at=symbol.added_at,
+                    last_updated=None,
+                    data_freshness_seconds=None,
                 )
                 for symbol in symbols
             ]
@@ -247,6 +251,164 @@ class Dashboard:
         except Exception as e:
             logger.error(f"Error getting watchlist for user {user_id}: {e}", exc_info=True)
             return []
+
+    def add_symbol(
+        self,
+        user_id: int,
+        symbol: str,
+        db: Session,
+        watchlist_id: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Add a symbol to user's watchlist.
+
+        Args:
+            user_id: User ID
+            symbol: Stock symbol to add
+            db: Database session
+            watchlist_id: Optional specific watchlist ID. If None, uses first watchlist.
+
+        Returns:
+            Dictionary with status and message
+        """
+        try:
+            # Validate symbol format
+            if not symbol or not isinstance(symbol, str):
+                return {"status": "error", "message": "Invalid symbol format"}
+            
+            symbol = symbol.upper().strip()
+            
+            # Symbol should be 1-5 characters, alphanumeric
+            if not (1 <= len(symbol) <= 5 and symbol.isalpha()):
+                return {"status": "error", "message": f"Invalid symbol: {symbol}. Must be 1-5 letters."}
+            
+            # Get user
+            user = db.query(User).filter(User.id == user_id).first()
+            if not user:
+                return {"status": "error", "message": "User not found"}
+            
+            # Get or create watchlist
+            if watchlist_id:
+                watchlist = db.query(Watchlist).filter(
+                    Watchlist.id == watchlist_id,
+                    Watchlist.user_id == user_id,
+                ).first()
+            else:
+                # Get first watchlist or create default
+                watchlist = db.query(Watchlist).filter(
+                    Watchlist.user_id == user_id,
+                ).first()
+                
+                if not watchlist:
+                    watchlist = Watchlist(
+                        user_id=user_id,
+                        name="Default Watchlist",
+                    )
+                    db.add(watchlist)
+                    db.commit()
+            
+            if not watchlist:
+                return {"status": "error", "message": "Watchlist not found"}
+            
+            # Check if symbol already exists
+            existing = db.query(WatchlistSymbol).filter(
+                WatchlistSymbol.watchlist_id == watchlist.id,
+                WatchlistSymbol.symbol == symbol,
+            ).first()
+            
+            if existing:
+                return {"status": "error", "message": f"Symbol {symbol} already in watchlist"}
+            
+            # Add symbol
+            ws = WatchlistSymbol(
+                watchlist_id=watchlist.id,
+                symbol=symbol,
+            )
+            db.add(ws)
+            db.commit()
+            
+            logger.info(f"Added symbol {symbol} to watchlist {watchlist.id} for user {user_id}")
+            return {"status": "success", "message": f"Symbol {symbol} added to watchlist", "symbol": symbol}
+        except Exception as e:
+            logger.error(f"Error adding symbol {symbol} for user {user_id}: {e}", exc_info=True)
+            db.rollback()
+            return {"status": "error", "message": f"Failed to add symbol: {str(e)}"}
+
+    def remove_symbol(
+        self,
+        user_id: int,
+        symbol: str,
+        db: Session,
+        watchlist_id: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Remove a symbol from user's watchlist.
+
+        Args:
+            user_id: User ID
+            symbol: Stock symbol to remove
+            db: Database session
+            watchlist_id: Optional specific watchlist ID
+
+        Returns:
+            Dictionary with status and message
+        """
+        try:
+            symbol = symbol.upper().strip()
+            
+            # Get user
+            user = db.query(User).filter(User.id == user_id).first()
+            if not user:
+                return {"status": "error", "message": "User not found"}
+            
+            # Find and remove symbol
+            query = db.query(WatchlistSymbol).join(Watchlist).filter(
+                Watchlist.user_id == user_id,
+                WatchlistSymbol.symbol == symbol,
+            )
+            
+            if watchlist_id:
+                query = query.filter(Watchlist.id == watchlist_id)
+            
+            ws = query.first()
+            
+            if not ws:
+                return {"status": "error", "message": f"Symbol {symbol} not found in watchlist"}
+            
+            db.delete(ws)
+            db.commit()
+            
+            logger.info(f"Removed symbol {symbol} from watchlist for user {user_id}")
+            return {"status": "success", "message": f"Symbol {symbol} removed from watchlist", "symbol": symbol}
+        except Exception as e:
+            logger.error(f"Error removing symbol {symbol} for user {user_id}: {e}", exc_info=True)
+            db.rollback()
+            return {"status": "error", "message": f"Failed to remove symbol: {str(e)}"}
+
+    def validate_symbol(
+        self,
+        symbol: str,
+    ) -> Dict[str, Any]:
+        """Validate a symbol format.
+
+        Args:
+            symbol: Stock symbol to validate
+
+        Returns:
+            Dictionary with validation status and message
+        """
+        try:
+            if not symbol or not isinstance(symbol, str):
+                return {"valid": False, "message": "Invalid symbol format"}
+            
+            symbol = symbol.upper().strip()
+            
+            # Symbol should be 1-5 characters, alphanumeric
+            if not (1 <= len(symbol) <= 5 and symbol.isalpha()):
+                return {"valid": False, "message": f"Invalid symbol: {symbol}. Must be 1-5 letters."}
+            
+            return {"valid": True, "message": f"Symbol {symbol} is valid", "symbol": symbol}
+        except Exception as e:
+            logger.error(f"Error validating symbol {symbol}: {e}", exc_info=True)
+            return {"valid": False, "message": f"Validation error: {str(e)}"}
 
     def get_top_opportunities(
         self,
@@ -384,12 +546,12 @@ class Dashboard:
 
             if not symbols:
                 return []
-
+            
             # Get recent news for these symbols
             cutoff_date = datetime.utcnow() - timedelta(days=days)
             articles = db.query(NewsArticle).filter(
                 NewsArticle.symbol.in_(symbols),
-                NewsArticle.fetched_at >= cutoff_date,
+                NewsArticle.published_at >= cutoff_date,
             ).order_by(NewsArticle.published_at.desc()).limit(limit).all()
 
             items = [
@@ -467,40 +629,14 @@ class Dashboard:
             watchlist_id: Optional specific watchlist ID
 
         Returns:
-            DashboardData with all dashboard sections
+            DashboardData with all sections
         """
-        try:
-            return DashboardData(
-                portfolio_summary=self.get_portfolio_summary(user_id, db),
-                watchlist=self.get_watchlist(user_id, db, watchlist_id),
-                top_opportunities=self.get_top_opportunities(user_id, db),
-                open_trades=self.get_open_trades(user_id, db),
-                recent_news=self.get_recent_news(user_id, db),
-                risk_settings=self.get_risk_settings(user_id, db),
-                timestamp=datetime.utcnow(),
-            )
-        except Exception as e:
-            logger.error(f"Error getting dashboard data for user {user_id}: {e}", exc_info=True)
-            # Return empty dashboard on error
-            return DashboardData(
-                portfolio_summary=PortfolioSummary(
-                    total_value=0.0,
-                    cash=0.0,
-                    positions_value=0.0,
-                    open_pl=0.0,
-                    open_pl_pct=0.0,
-                    num_open_trades=0,
-                    num_open_signals=0,
-                ),
-                watchlist=[],
-                top_opportunities=[],
-                open_trades=[],
-                recent_news=[],
-                risk_settings=RiskSettings(
-                    risk_level="medium",
-                    paper_trading_enabled=True,
-                    live_trading_enabled=False,
-                    live_trading_approved=False,
-                ),
-                timestamp=datetime.utcnow(),
-            )
+        return DashboardData(
+            portfolio_summary=self.get_portfolio_summary(user_id, db),
+            watchlist=self.get_watchlist(user_id, db, watchlist_id),
+            top_opportunities=self.get_top_opportunities(user_id, db),
+            open_trades=self.get_open_trades(user_id, db),
+            recent_news=self.get_recent_news(user_id, db),
+            risk_settings=self.get_risk_settings(user_id, db),
+            timestamp=datetime.utcnow(),
+        )

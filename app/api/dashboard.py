@@ -69,6 +69,8 @@ async def get_dashboard_data(
                     "symbol": item.symbol,
                     "current_price": item.current_price,
                     "added_at": item.added_at.isoformat(),
+                    "last_updated": item.last_updated.isoformat() if item.last_updated else None,
+                    "data_freshness_seconds": item.data_freshness_seconds,
                 }
                 for item in data.watchlist
             ],
@@ -161,6 +163,130 @@ async def get_portfolio_summary(
     except Exception as e:
         logger.error(f"Error getting portfolio summary for user {user_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to retrieve portfolio summary")
+
+
+@router.get("/watchlist", response_model=dict)
+async def get_watchlist(
+    user_id: int = Query(..., description="User ID"),
+    watchlist_id: Optional[int] = Query(None, description="Optional watchlist ID"),
+    db: Session = Depends(get_db),
+    dashboard: Dashboard = Depends(get_dashboard),
+) -> dict:
+    """Get watchlist for user with current prices and data freshness.
+    
+    Args:
+        user_id: User ID
+        watchlist_id: Optional specific watchlist ID
+        db: Database session
+        dashboard: Dashboard service
+        
+    Returns:
+        Watchlist with symbols and prices
+    """
+    try:
+        watchlist = dashboard.get_watchlist(user_id, db, watchlist_id)
+        return {
+            "symbols": [
+                {
+                    "symbol": item.symbol,
+                    "current_price": item.current_price,
+                    "added_at": item.added_at.isoformat(),
+                    "last_updated": item.last_updated.isoformat() if item.last_updated else None,
+                    "data_freshness_seconds": item.data_freshness_seconds,
+                }
+                for item in watchlist
+            ],
+            "count": len(watchlist),
+        }
+    except Exception as e:
+        logger.error(f"Error getting watchlist for user {user_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to retrieve watchlist")
+
+
+@router.post("/watchlist/add", response_model=dict)
+async def add_watchlist_symbol(
+    user_id: int = Query(..., description="User ID"),
+    symbol: str = Query(..., description="Stock symbol to add"),
+    watchlist_id: Optional[int] = Query(None, description="Optional watchlist ID"),
+    db: Session = Depends(get_db),
+    dashboard: Dashboard = Depends(get_dashboard),
+) -> dict:
+    """Add a symbol to user's watchlist.
+    
+    Args:
+        user_id: User ID
+        symbol: Stock symbol to add
+        watchlist_id: Optional specific watchlist ID
+        db: Database session
+        dashboard: Dashboard service
+        
+    Returns:
+        Result of add operation
+    """
+    try:
+        result = dashboard.add_symbol(user_id, symbol, db, watchlist_id)
+        if result["status"] == "error":
+            raise HTTPException(status_code=400, detail=result["message"])
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error adding symbol {symbol} for user {user_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to add symbol")
+
+
+@router.post("/watchlist/remove", response_model=dict)
+async def remove_watchlist_symbol(
+    user_id: int = Query(..., description="User ID"),
+    symbol: str = Query(..., description="Stock symbol to remove"),
+    watchlist_id: Optional[int] = Query(None, description="Optional watchlist ID"),
+    db: Session = Depends(get_db),
+    dashboard: Dashboard = Depends(get_dashboard),
+) -> dict:
+    """Remove a symbol from user's watchlist.
+    
+    Args:
+        user_id: User ID
+        symbol: Stock symbol to remove
+        watchlist_id: Optional specific watchlist ID
+        db: Database session
+        dashboard: Dashboard service
+        
+    Returns:
+        Result of remove operation
+    """
+    try:
+        result = dashboard.remove_symbol(user_id, symbol, db, watchlist_id)
+        if result["status"] == "error":
+            raise HTTPException(status_code=400, detail=result["message"])
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error removing symbol {symbol} for user {user_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to remove symbol")
+
+
+@router.post("/watchlist/validate", response_model=dict)
+async def validate_symbol(
+    symbol: str = Query(..., description="Stock symbol to validate"),
+    dashboard: Dashboard = Depends(get_dashboard),
+) -> dict:
+    """Validate a stock symbol format.
+    
+    Args:
+        symbol: Stock symbol to validate
+        dashboard: Dashboard service
+        
+    Returns:
+        Validation result
+    """
+    try:
+        result = dashboard.validate_symbol(symbol)
+        return result
+    except Exception as e:
+        logger.error(f"Error validating symbol {symbol}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to validate symbol")
 
 
 @router.get("/opportunities", response_model=dict)
