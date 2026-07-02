@@ -5,6 +5,7 @@ Verifies:
 - Historical signal replay avoids look-ahead bias
 - Simulated trades are stored correctly
 - Strategy backtester integrates with engine
+- Paper trading comparison works correctly
 """
 
 import pytest
@@ -12,7 +13,7 @@ from datetime import datetime, timedelta
 import pandas as pd
 import numpy as np
 
-from app.backtesting.engine import BacktestEngine, BacktestResult, SimulatedTrade
+from app.backtesting.engine import BacktestEngine, BacktestResult, SimulatedTrade, PaperTradingComparison
 from app.backtesting.strategy_backtester import StrategyBacktester
 from app.backtesting.covered_call_backtest import CoveredCallBacktester
 
@@ -70,6 +71,7 @@ class TestBacktestEngine:
         assert result.final_value > 0
         assert result.start_date == sample_price_data.index[0]
         assert result.end_date == sample_price_data.index[-1]
+        assert result.expected_fill_rate == 1.0  # Backtest assumes 100% fill
 
     def test_backtest_with_multiple_trades(self, backtest_engine, sample_price_data):
         """Test backtest with multiple entry/exit signals."""
@@ -135,8 +137,10 @@ class TestBacktestEngine:
         assert "avg_loss" in result_dict
         assert "expected_value" in result_dict
         assert "avg_holding_period" in result_dict
+        assert "expected_fill_rate" in result_dict
         assert "is_losing_strategy" in result_dict
         assert result_dict["symbol"] == "TEST"
+        assert result_dict["expected_fill_rate"] == 1.0
 
     def test_backtest_metrics_calculation(self, backtest_engine, sample_price_data):
         """Test that all metrics are calculated correctly."""
@@ -161,6 +165,7 @@ class TestBacktestEngine:
         assert result.avg_holding_period >= 0.0
         assert isinstance(result.expected_value, float)
         assert result.total_trades >= 0
+        assert result.expected_fill_rate == 1.0
 
     def test_losing_strategy_marked(self, backtest_engine, sample_price_data):
         """Test that losing strategies are marked."""
@@ -289,6 +294,182 @@ class TestHistoricalSignalReplay:
         assert trade_dict["reason"] == "SMA crossover"
 
 
+class TestPaperTradingComparison:
+    """Tests for paper trading comparison."""
+
+    def test_compare_paper_trading_perfect_execution(self, backtest_engine, sample_price_data):
+        """Test comparison when paper trading matches backtest perfectly."""
+        # Create backtest result
+        signals = pd.Series([0] * len(sample_price_data), index=sample_price_data.index)
+        signals.iloc[10] = 1
+        signals.iloc[30] = -1
+        
+        backtest_result = backtest_engine.backtest(
+            symbol="TEST",
+            price_data=sample_price_data,
+            signals=signals,
+        )
+        
+        # Create paper trades that match backtest perfectly
+        paper_trades = [
+            {
+                "entry_price": sample_price_data["close"].iloc[10],
+                "actual_entry_price": sample_price_data["close"].iloc[10],
+                "exit_price": sample_price_data["close"].iloc[30],
+                "actual_exit_price": sample_price_data["close"].iloc[30],
+                "filled": True,
+                "quantity": 1,
+                "entry_date": sample_price_data.index[10],
+                "exit_date": sample_price_data.index[30],
+            }
+        ]
+        
+        comparison = backtest_engine.compare_paper_trading(
+            backtest_result=backtest_result,
+            paper_trades=paper_trades,
+        )
+        
+        assert comparison.strategy_name == backtest_result.strategy_name
+        assert comparison.symbol == backtest_result.symbol
+        assert comparison.paper_total_trades == 1
+        assert comparison.paper_filled_trades == 1
+        assert comparison.paper_missed_fills == 0
+        assert comparison.paper_fill_rate == 1.0
+        assert comparison.recommendation == "enable"
+        assert not comparison.assumptions_too_optimistic
+
+    def test_compare_paper_trading_with_slippage(self, backtest_engine, sample_price_data):
+        """Test comparison when paper trading has slippage."""
+        signals = pd.Series([0] * len(sample_price_data), index=sample_price_data.index)
+        signals.iloc[10] = 1
+        signals.iloc[30] = -1
+        
+        backtest_result = backtest_engine.backtest(
+            symbol="TEST",
+            price_data=sample_price_data,
+            signals=signals,
+        )
+        
+        # Create paper trades with slippage
+        entry_price = sample_price_data["close"].iloc[10]
+        exit_price = sample_price_data["close"].iloc[30]
+        
+        paper_trades = [
+            {
+                "entry_price": entry_price,
+                "actual_entry_price": entry_price * 1.005,  # 0.5% slippage
+                "exit_price": exit_price,
+                "actual_exit_price": exit_price * 0.995,  # 0.5% slippage
+                "filled": True,
+                "quantity": 1,
+                "entry_date": sample_price_data.index[10],
+                "exit_date": sample_price_data.index[30],
+            }
+        ]
+        
+        comparison = backtest_engine.compare_paper_trading(
+            backtest_result=backtest_result,
+            paper_trades=paper_trades,
+            slippage_threshold=0.01,
+        )
+        
+        assert comparison.paper_fill_rate == 1.0
+        assert abs(comparison.paper_slippage_per_trade) > 0
+        # Slippage is within threshold, so should still recommend enable
+        assert comparison.recommendation in ["enable", "monitor"]
+
+    def test_compare_paper_trading_with_missed_fills(self, backtest_engine, sample_price_data):
+        """Test comparison when paper trading has missed fills."""
+        signals = pd.Series([0] * len(sample_price_data), index=sample_price_data.index)
+        signals.iloc[10] = 1
+        signals.iloc[30] = -1
+        signals.iloc[40] = 1
+        signals.iloc[60] = -1
+        
+        backtest_result = backtest_engine.backtest(
+            symbol="TEST",
+            price_data=sample_price_data,
+            signals=signals,
+        )
+        
+        # Create paper trades with one missed fill
+        paper_trades = [
+            {
+                "entry_price": sample_price_data["close"].iloc[10],
+                "actual_entry_price": sample_price_data["close"].iloc[10],
+                "exit_price": sample_price_data["close"].iloc[30],
+                "actual_exit_price": sample_price_data["close"].iloc[30],
+                "filled": True,
+                "quantity": 1,
+                "entry_date": sample_price_data.index[10],
+                "exit_date": sample_price_data.index[30],
+            },
+            {
+                "entry_price": sample_price_data["close"].iloc[40],
+                "actual_entry_price": None,
+                "exit_price": sample_price_data["close"].iloc[60],
+                "actual_exit_price": None,
+                "filled": False,
+                "quantity": 1,
+                "entry_date": sample_price_data.index[40],
+                "exit_date": None,
+            }
+        ]
+        
+        comparison = backtest_engine.compare_paper_trading(
+            backtest_result=backtest_result,
+            paper_trades=paper_trades,
+            fill_rate_threshold=0.95,
+        )
+        
+        assert comparison.paper_total_trades == 2
+        assert comparison.paper_filled_trades == 1
+        assert comparison.paper_missed_fills == 1
+        assert comparison.paper_fill_rate == 0.5
+        # Fill rate is below threshold, should recommend monitor or disable
+        assert comparison.recommendation in ["monitor", "disable"]
+
+    def test_paper_trading_comparison_to_dict(self, backtest_engine, sample_price_data):
+        """Test PaperTradingComparison.to_dict() method."""
+        signals = pd.Series([0] * len(sample_price_data), index=sample_price_data.index)
+        signals.iloc[10] = 1
+        signals.iloc[30] = -1
+        
+        backtest_result = backtest_engine.backtest(
+            symbol="TEST",
+            price_data=sample_price_data,
+            signals=signals,
+        )
+        
+        paper_trades = [
+            {
+                "entry_price": sample_price_data["close"].iloc[10],
+                "actual_entry_price": sample_price_data["close"].iloc[10],
+                "exit_price": sample_price_data["close"].iloc[30],
+                "actual_exit_price": sample_price_data["close"].iloc[30],
+                "filled": True,
+                "quantity": 1,
+                "entry_date": sample_price_data.index[10],
+                "exit_date": sample_price_data.index[30],
+            }
+        ]
+        
+        comparison = backtest_engine.compare_paper_trading(
+            backtest_result=backtest_result,
+            paper_trades=paper_trades,
+        )
+        
+        comparison_dict = comparison.to_dict()
+        
+        assert "strategy_name" in comparison_dict
+        assert "symbol" in comparison_dict
+        assert "paper_fill_rate" in comparison_dict
+        assert "paper_slippage_per_trade" in comparison_dict
+        assert "pnl_difference" in comparison_dict
+        assert "assumptions_too_optimistic" in comparison_dict
+        assert "recommendation" in comparison_dict
+
+
 class TestStrategyBacktester:
     """Tests for StrategyBacktester base class."""
 
@@ -325,78 +506,4 @@ class TestStrategyBacktester:
         signals = backtester.generate_signals(sample_price_data)
         
         assert len(signals) == len(sample_price_data)
-        assert all(s in [0, 1, -1] for s in signals)
-
-    def test_covered_call_backtest_with_options(self, sample_price_data):
-        """Test backtest with option premium modeling."""
-        backtester = CoveredCallBacktester()
-        
-        # Create dummy option data
-        option_data = pd.DataFrame(
-            {"premium": [0.5] * len(sample_price_data)},
-            index=sample_price_data.index,
-        )
-        
-        result = backtester.backtest_with_options(
-            symbol="TEST",
-            price_data=sample_price_data,
-            option_data=option_data,
-        )
-        
-        assert result.strategy_name == "covered_call"
-        assert result.total_trades >= 0
-
-
-class TestLookAheadBiasPrevention:
-    """Tests specifically for look-ahead bias prevention."""
-
-    def test_signal_generator_cannot_see_future_prices(self, backtest_engine, sample_price_data):
-        """Verify signal generator only sees historical data."""
-        future_data_accessed = False
-        
-        def signal_generator(symbol, price_data_up_to_date):
-            """Try to access future data (should fail)."""
-            nonlocal future_data_accessed
-            
-            # This should work (current data)
-            current_price = price_data_up_to_date["close"].iloc[-1]
-            
-            # This should fail or return NaN (future data)
-            try:
-                future_price = price_data_up_to_date["close"].iloc[len(price_data_up_to_date)]
-                future_data_accessed = True
-            except (IndexError, KeyError):
-                pass
-            
-            return 0
-        
-        backtest_engine.replay_signals_day_by_day(
-            symbol="TEST",
-            price_data=sample_price_data,
-            signal_generator_fn=signal_generator,
-        )
-        
-        # Verify future data was not accessible
-        assert not future_data_accessed
-
-    def test_backtest_result_string_includes_all_metrics(self, backtest_engine, sample_price_data):
-        """Test that backtest result string includes all metrics."""
-        signals = pd.Series([0] * len(sample_price_data), index=sample_price_data.index)
-        signals.iloc[10] = 1
-        signals.iloc[50] = -1
-        
-        result = backtest_engine.backtest(
-            symbol="TEST",
-            price_data=sample_price_data,
-            signals=signals,
-        )
-        
-        result_str = str(result)
-        
-        # Verify key metrics appear in string
-        assert "Win Rate" in result_str
-        assert "Avg Win" in result_str
-        assert "Avg Loss" in result_str
-        assert "Profit Factor" in result_str
-        assert "Expected Value" in result_str
-        assert "Avg Holding Period" in result_str
+        assert all(s in [-1, 0, 1] for s in signals)

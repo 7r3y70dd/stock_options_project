@@ -41,6 +41,7 @@ class BacktestResult:
         avg_loss: Average loss on losing trades
         expected_value: Expected value per trade (avg_win * win_rate + avg_loss * (1 - win_rate))
         avg_holding_period: Average number of days holding per trade
+        expected_fill_rate: Expected fill rate (0.0-1.0) for comparison with paper trading
         trades: DataFrame with individual trade details
         equity_curve: Series with daily portfolio values
         metadata: Additional metadata from backtest
@@ -65,6 +66,7 @@ class BacktestResult:
     avg_loss: float
     expected_value: float
     avg_holding_period: float
+    expected_fill_rate: float = 1.0  # Assume 100% fill rate in backtest
     trades: Optional[pd.DataFrame] = None
     equity_curve: Optional[pd.Series] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
@@ -100,6 +102,7 @@ class BacktestResult:
             "avg_loss": self.avg_loss,
             "expected_value": self.expected_value,
             "avg_holding_period": self.avg_holding_period,
+            "expected_fill_rate": self.expected_fill_rate,
             "is_losing_strategy": self.is_losing_strategy(),
         }
 
@@ -115,7 +118,7 @@ class BacktestResult:
             f"  Trades: {self.total_trades} | Win Rate: {self.win_rate:.2%}\n"
             f"  Avg Trade: ${self.avg_trade_profit:,.2f} | Avg Win: ${self.avg_win:,.2f} | Avg Loss: ${self.avg_loss:,.2f}\n"
             f"  Profit Factor: {self.profit_factor:.2f} | Expected Value: ${self.expected_value:,.2f}\n"
-            f"  Avg Holding Period: {self.avg_holding_period:.1f} days"
+            f"  Avg Holding Period: {self.avg_holding_period:.1f} days | Expected Fill Rate: {self.expected_fill_rate:.1%}"
         )
 
 
@@ -159,6 +162,86 @@ class SimulatedTrade:
         }
 
 
+@dataclass
+class PaperTradingComparison:
+    """Comparison between backtest assumptions and paper trading results.
+    
+    Attributes:
+        strategy_name: Name of the strategy
+        symbol: Stock symbol
+        backtest_result: BacktestResult from historical backtest
+        paper_start_date: Start date of paper trading period
+        paper_end_date: End date of paper trading period
+        paper_total_trades: Number of trades executed in paper trading
+        paper_filled_trades: Number of trades that filled in paper trading
+        paper_missed_fills: Number of trades that did not fill
+        paper_fill_rate: Actual fill rate in paper trading (0.0-1.0)
+        paper_avg_fill_price: Average fill price in paper trading
+        paper_expected_fill_price: Expected fill price from backtest
+        paper_slippage_per_trade: Average slippage per trade (actual - expected)
+        paper_total_pnl: Total P&L from paper trading
+        backtest_expected_pnl: Expected P&L from backtest
+        pnl_difference: Difference between paper and backtest P&L
+        pnl_difference_pct: P&L difference as percentage
+        assumptions_too_optimistic: Whether backtest assumptions appear too optimistic
+        recommendation: Recommendation for strategy ("enable", "disable", "monitor")
+    """
+    strategy_name: str
+    symbol: str
+    backtest_result: BacktestResult
+    paper_start_date: datetime
+    paper_end_date: datetime
+    paper_total_trades: int
+    paper_filled_trades: int
+    paper_missed_fills: int
+    paper_fill_rate: float
+    paper_avg_fill_price: float
+    paper_expected_fill_price: float
+    paper_slippage_per_trade: float
+    paper_total_pnl: float
+    backtest_expected_pnl: float
+    pnl_difference: float
+    pnl_difference_pct: float
+    assumptions_too_optimistic: bool
+    recommendation: str  # "enable", "disable", "monitor"
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary."""
+        return {
+            "strategy_name": self.strategy_name,
+            "symbol": self.symbol,
+            "paper_start_date": self.paper_start_date.isoformat(),
+            "paper_end_date": self.paper_end_date.isoformat(),
+            "paper_total_trades": self.paper_total_trades,
+            "paper_filled_trades": self.paper_filled_trades,
+            "paper_missed_fills": self.paper_missed_fills,
+            "paper_fill_rate": self.paper_fill_rate,
+            "paper_avg_fill_price": self.paper_avg_fill_price,
+            "paper_expected_fill_price": self.paper_expected_fill_price,
+            "paper_slippage_per_trade": self.paper_slippage_per_trade,
+            "paper_total_pnl": self.paper_total_pnl,
+            "backtest_expected_pnl": self.backtest_expected_pnl,
+            "pnl_difference": self.pnl_difference,
+            "pnl_difference_pct": self.pnl_difference_pct,
+            "assumptions_too_optimistic": self.assumptions_too_optimistic,
+            "recommendation": self.recommendation,
+        }
+
+    def __str__(self) -> str:
+        """String representation of comparison."""
+        optimism_marker = " [ASSUMPTIONS TOO OPTIMISTIC]" if self.assumptions_too_optimistic else ""
+        return (
+            f"PaperTradingComparison({self.strategy_name} on {self.symbol}){optimism_marker}\n"
+            f"  Period: {self.paper_start_date.date()} to {self.paper_end_date.date()}\n"
+            f"  Fill Rate: {self.paper_fill_rate:.1%} ({self.paper_filled_trades}/{self.paper_total_trades} trades)\n"
+            f"  Missed Fills: {self.paper_missed_fills}\n"
+            f"  Avg Slippage: ${self.paper_slippage_per_trade:,.2f} per trade\n"
+            f"  Paper P&L: ${self.paper_total_pnl:,.2f} vs Backtest Expected: ${self.backtest_expected_pnl:,.2f}\n"
+            f"  P&L Difference: ${self.pnl_difference:,.2f} ({self.pnl_difference_pct:.2%})\n"
+            f"  Recommendation: {self.recommendation.upper()}"
+        )
+
+
 class BacktestEngine:
     """Vectorized backtesting engine using VectorBT.
     
@@ -168,6 +251,7 @@ class BacktestEngine:
     - Trade-level analysis and equity curve tracking
     - Vectorized operations for speed
     - Historical signal replay with look-ahead bias prevention
+    - Paper trading comparison and validation
     
     Limitations for options backtesting:
     - Does not model option Greeks (delta, gamma, theta, vega)
@@ -315,21 +399,22 @@ class BacktestEngine:
             start_date=start_date,
             end_date=end_date,
             initial_cash=self.initial_cash,
-            final_value=float(final_value),
-            total_return=float(total_return),
-            annual_return=float(annual_return),
-            sharpe_ratio=float(sharpe_ratio),
-            max_drawdown=float(max_drawdown),
-            win_rate=float(win_rate),
-            total_trades=int(total_trades),
-            avg_trade_profit=float(avg_trade_profit),
-            best_trade=float(best_trade),
-            worst_trade=float(worst_trade),
-            profit_factor=float(profit_factor),
-            avg_win=float(avg_win),
-            avg_loss=float(avg_loss),
-            expected_value=float(expected_value),
-            avg_holding_period=float(avg_holding_period),
+            final_value=final_value,
+            total_return=total_return,
+            annual_return=annual_return,
+            sharpe_ratio=sharpe_ratio,
+            max_drawdown=max_drawdown,
+            win_rate=win_rate,
+            total_trades=total_trades,
+            avg_trade_profit=avg_trade_profit,
+            best_trade=best_trade,
+            worst_trade=worst_trade,
+            profit_factor=profit_factor,
+            avg_win=avg_win,
+            avg_loss=avg_loss,
+            expected_value=expected_value,
+            avg_holding_period=avg_holding_period,
+            expected_fill_rate=1.0,  # Backtest assumes 100% fill rate
             equity_curve=equity_curve,
         )
 
@@ -346,113 +431,73 @@ class BacktestEngine:
         """Replay historical signals day-by-day to avoid look-ahead bias.
         
         This method simulates signal generation as if the strategy were running
-        in real-time, using only data available up to each day. This prevents
-        look-ahead bias where future data would influence past decisions.
+        in real-time, using only data available up to each day.
         
         Args:
             symbol: Stock symbol
-            price_data: DataFrame with OHLCV data (index=date, columns=[open, high, low, close, volume])
-            signal_generator_fn: Callable that takes (symbol, price_data_up_to_date) and returns signal (1, -1, or 0)
-            strategy_name: Name of strategy being tested
+            price_data: DataFrame with OHLCV data
+            signal_generator_fn: Callable that takes (symbol, price_data_up_to_date) and returns signal
+            strategy_name: Name of strategy
             
         Returns:
             Tuple of (BacktestResult, List[SimulatedTrade])
-            
-        Raises:
-            ValueError: If price_data is invalid
         """
         if price_data.empty:
             raise ValueError("price_data cannot be empty")
         
-        # Initialize tracking
+        trades: List[SimulatedTrade] = []
         signals = []
-        simulated_trades: List[SimulatedTrade] = []
-        current_position = None  # Track open position
-        portfolio_value = self.initial_cash
-        equity_values = []
+        current_position = None
+        entry_price = None
+        entry_date = None
+        entry_signal_score = 0.0
+        entry_reason = ""
         
-        # Replay day by day
+        # Generate signals day by day
         for i in range(len(price_data)):
-            # Get data up to current day (no look-ahead)
-            current_date = price_data.index[i]
-            price_data_up_to = price_data.iloc[:i+1]
+            # Get data available up to current day (no look-ahead)
+            price_data_up_to_date = price_data.iloc[:i+1]
             
             # Generate signal using only available data
-            signal = signal_generator_fn(symbol, price_data_up_to)
+            signal = signal_generator_fn(symbol, price_data_up_to_date)
             signals.append(signal)
             
             current_price = price_data["close"].iloc[i]
+            current_date = price_data.index[i]
             
             # Handle entry signal
             if signal == 1 and current_position is None:
-                current_position = {
-                    "entry_date": current_date,
-                    "entry_price": current_price,
-                    "quantity": int(portfolio_value / current_price),
-                }
+                current_position = "long"
+                entry_price = current_price
+                entry_date = current_date
+                entry_signal_score = 0.0  # Default score
+                entry_reason = "signal_generated"
             
             # Handle exit signal
-            elif signal == -1 and current_position is not None:
-                exit_date = current_date
-                exit_price = current_price
-                entry_price = current_position["entry_price"]
-                quantity = current_position["quantity"]
+            elif signal == -1 and current_position == "long":
+                if entry_price is not None and entry_date is not None:
+                    pnl = (current_price - entry_price) * 1  # Assume 1 share
+                    pnl_pct = (pnl / entry_price) if entry_price > 0 else 0.0
+                    
+                    trade = SimulatedTrade(
+                        entry_date=entry_date,
+                        entry_price=entry_price,
+                        exit_date=current_date,
+                        exit_price=current_price,
+                        quantity=1,
+                        pnl=pnl,
+                        pnl_pct=pnl_pct,
+                        reason=entry_reason,
+                        signal_score=entry_signal_score,
+                    )
+                    trades.append(trade)
                 
-                # Calculate P&L
-                pnl = (exit_price - entry_price) * quantity
-                pnl_pct = (exit_price - entry_price) / entry_price if entry_price > 0 else 0.0
-                
-                # Calculate holding period
-                holding_days = (exit_date - current_position["entry_date"]).days
-                
-                # Create trade record
-                trade = SimulatedTrade(
-                    entry_date=current_position["entry_date"],
-                    entry_price=entry_price,
-                    exit_date=exit_date,
-                    exit_price=exit_price,
-                    quantity=quantity,
-                    pnl=pnl,
-                    pnl_pct=pnl_pct,
-                    reason="signal",
-                    signal_score=0.0,
-                )
-                simulated_trades.append(trade)
-                
-                # Update portfolio value
-                portfolio_value += pnl
                 current_position = None
-            
-            equity_values.append(portfolio_value)
+                entry_price = None
+                entry_date = None
         
-        # Close any open position at end
-        if current_position is not None:
-            exit_date = price_data.index[-1]
-            exit_price = price_data["close"].iloc[-1]
-            entry_price = current_position["entry_price"]
-            quantity = current_position["quantity"]
-            
-            pnl = (exit_price - entry_price) * quantity
-            pnl_pct = (exit_price - entry_price) / entry_price if entry_price > 0 else 0.0
-            
-            trade = SimulatedTrade(
-                entry_date=current_position["entry_date"],
-                entry_price=entry_price,
-                exit_date=exit_date,
-                exit_price=exit_price,
-                quantity=quantity,
-                pnl=pnl,
-                pnl_pct=pnl_pct,
-                reason="end_of_period",
-                signal_score=0.0,
-            )
-            simulated_trades.append(trade)
-            portfolio_value += pnl
-        
-        # Convert signals to DataFrame
+        # Convert signals to DataFrame and run backtest
         signals_df = pd.Series(signals, index=price_data.index)
-        
-        # Run backtest with generated signals
         result = self.backtest(
             symbol=symbol,
             price_data=price_data,
@@ -460,4 +505,108 @@ class BacktestEngine:
             strategy_name=strategy_name,
         )
         
-        return result, simulated_trades
+        return result, trades
+
+    def compare_paper_trading(
+        self,
+        backtest_result: BacktestResult,
+        paper_trades: List[Dict[str, Any]],
+        fill_rate_threshold: float = 0.95,
+        slippage_threshold: float = 0.01,
+        pnl_variance_threshold: float = 0.10,
+    ) -> PaperTradingComparison:
+        """Compare backtest assumptions against paper trading results.
+        
+        Args:
+            backtest_result: BacktestResult from historical backtest
+            paper_trades: List of paper trading trades with fields:
+                - entry_price: Expected entry price
+                - actual_entry_price: Actual fill price
+                - exit_price: Expected exit price
+                - actual_exit_price: Actual exit fill price
+                - filled: Whether trade filled
+                - entry_date: Entry date
+                - exit_date: Exit date
+            fill_rate_threshold: Minimum acceptable fill rate (0.0-1.0)
+            slippage_threshold: Maximum acceptable slippage as decimal
+            pnl_variance_threshold: Maximum acceptable P&L variance as decimal
+            
+        Returns:
+            PaperTradingComparison with analysis
+        """
+        if not paper_trades:
+            logger.warning("No paper trades provided for comparison")
+            paper_trades = []
+        
+        # Calculate paper trading metrics
+        total_trades = len(paper_trades)
+        filled_trades = sum(1 for t in paper_trades if t.get("filled", False))
+        missed_fills = total_trades - filled_trades
+        fill_rate = filled_trades / total_trades if total_trades > 0 else 0.0
+        
+        # Calculate slippage
+        slippages = []
+        for trade in paper_trades:
+            if trade.get("filled", False):
+                entry_slippage = trade.get("actual_entry_price", 0) - trade.get("entry_price", 0)
+                exit_slippage = trade.get("actual_exit_price", 0) - trade.get("exit_price", 0)
+                slippages.append(entry_slippage + exit_slippage)
+        
+        avg_slippage = np.mean(slippages) if slippages else 0.0
+        
+        # Calculate P&L
+        paper_pnl = 0.0
+        for trade in paper_trades:
+            if trade.get("filled", False):
+                entry = trade.get("actual_entry_price", 0)
+                exit_p = trade.get("actual_exit_price", 0)
+                qty = trade.get("quantity", 1)
+                paper_pnl += (exit_p - entry) * qty
+        
+        backtest_pnl = backtest_result.final_value - backtest_result.initial_cash
+        pnl_difference = paper_pnl - backtest_pnl
+        pnl_difference_pct = (pnl_difference / backtest_pnl) if backtest_pnl != 0 else 0.0
+        
+        # Determine if assumptions are too optimistic
+        assumptions_too_optimistic = (
+            fill_rate < fill_rate_threshold or
+            abs(avg_slippage) > slippage_threshold or
+            pnl_difference_pct < -pnl_variance_threshold
+        )
+        
+        # Generate recommendation
+        if assumptions_too_optimistic:
+            if fill_rate < fill_rate_threshold * 0.8 or pnl_difference_pct < -pnl_variance_threshold * 2:
+                recommendation = "disable"
+            else:
+                recommendation = "monitor"
+        else:
+            recommendation = "enable"
+        
+        # Get average fill prices
+        avg_entry_price = np.mean([t.get("entry_price", 0) for t in paper_trades]) if paper_trades else 0.0
+        avg_actual_entry = np.mean([t.get("actual_entry_price", 0) for t in paper_trades if t.get("filled")]) if filled_trades > 0 else 0.0
+        
+        comparison = PaperTradingComparison(
+            strategy_name=backtest_result.strategy_name,
+            symbol=backtest_result.symbol,
+            backtest_result=backtest_result,
+            paper_start_date=min([t.get("entry_date") for t in paper_trades], default=datetime.utcnow()),
+            paper_end_date=max([t.get("exit_date") for t in paper_trades], default=datetime.utcnow()),
+            paper_total_trades=total_trades,
+            paper_filled_trades=filled_trades,
+            paper_missed_fills=missed_fills,
+            paper_fill_rate=fill_rate,
+            paper_avg_fill_price=avg_actual_entry,
+            paper_expected_fill_price=avg_entry_price,
+            paper_slippage_per_trade=avg_slippage,
+            paper_total_pnl=paper_pnl,
+            backtest_expected_pnl=backtest_pnl,
+            pnl_difference=pnl_difference,
+            pnl_difference_pct=pnl_difference_pct,
+            assumptions_too_optimistic=assumptions_too_optimistic,
+            recommendation=recommendation,
+        )
+        
+        logger.info(f"Paper trading comparison: {comparison}")
+        return comparison
