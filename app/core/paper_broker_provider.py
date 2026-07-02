@@ -381,29 +381,40 @@ class PaperBrokerProvider(BrokerProvider):
         if order_type == OrderType.MARKET:
             fill_price = current_price
             status = OrderStatus.FILLED
-            filled_quantity = quantity
         elif order_type == OrderType.LIMIT:
             if price is None:
                 error_msg = "Limit order requires price"
                 self._log_error("place_order", error_msg)
                 raise ValueError(error_msg)
-            # In paper trading, assume limit orders fill immediately if price is reasonable
-            if (side == OrderSide.BUY and price >= current_price * 0.95) or \
-               (side == OrderSide.SELL and price <= current_price * 1.05):
+            # Simulate limit order: fill if price is favorable
+            if side == OrderSide.BUY and price >= current_price:
                 fill_price = price
                 status = OrderStatus.FILLED
-                filled_quantity = quantity
+            elif side == OrderSide.SELL and price <= current_price:
+                fill_price = price
+                status = OrderStatus.FILLED
             else:
                 fill_price = None
                 status = OrderStatus.PENDING
-                filled_quantity = 0
         else:
-            # Stop and stop-limit orders start as pending
+            # Stop and stop-limit orders default to pending
             fill_price = None
             status = OrderStatus.PENDING
-            filled_quantity = 0
+        
+        # Calculate cash impact
+        if status == OrderStatus.FILLED:
+            cash_impact = quantity * fill_price
+            if side == OrderSide.BUY:
+                if self.cash < cash_impact:
+                    error_msg = f"Insufficient cash: need ${cash_impact:.2f}, have ${self.cash:.2f}"
+                    self._log_error("place_order", error_msg)
+                    raise ValueError(error_msg)
+                self.cash -= cash_impact
+            else:  # SELL
+                self.cash += cash_impact
         
         # Create order
+        now = datetime.utcnow()
         order = Order(
             order_id=order_id,
             symbol=symbol,
@@ -413,19 +424,39 @@ class PaperBrokerProvider(BrokerProvider):
             status=status,
             price=price,
             stop_price=stop_price,
-            filled_quantity=filled_quantity,
+            filled_quantity=quantity if status == OrderStatus.FILLED else 0,
             filled_price=fill_price,
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow(),
+            created_at=now,
+            updated_at=now,
         )
         
         # Store order
         self.orders[order_id] = order
         
-        # Update positions and cash if order filled
+        # Update positions if filled
         if status == OrderStatus.FILLED:
-            self._update_position(symbol, quantity, side, fill_price)
-            self._update_cash(quantity, side, fill_price)
+            if symbol not in self.positions:
+                self.positions[symbol] = Position(
+                    symbol=symbol,
+                    quantity=0,
+                    side=PositionSide.LONG if side == OrderSide.BUY else PositionSide.SHORT,
+                    entry_price=fill_price,
+                    current_price=fill_price,
+                    market_value=quantity * fill_price,
+                    unrealized_pl=0.0,
+                    unrealized_pl_pct=0.0,
+                    updated_at=now,
+                )
+            
+            position = self.positions[symbol]
+            if side == OrderSide.BUY:
+                position.quantity += quantity
+            else:
+                position.quantity -= quantity
+            
+            position.current_price = fill_price
+            position.market_value = position.quantity * fill_price
+            position.updated_at = now
         
         # Log response
         self._log_response(
@@ -433,24 +464,25 @@ class PaperBrokerProvider(BrokerProvider):
             {
                 "order_id": order_id,
                 "status": status.value,
-                "filled_quantity": filled_quantity,
+                "filled_quantity": order.filled_quantity,
                 "filled_price": fill_price,
+                "cash_remaining": self.cash,
             },
         )
         
         return order
 
     def cancel_order(self, order_id: str) -> Order:
-        """Cancel an order.
+        """Cancel an existing order.
         
         Args:
-            order_id: ID of order to cancel
+            order_id: ID of the order to cancel
             
         Returns:
-            Updated Order object
+            Updated Order object with cancelled status
             
         Raises:
-            ValueError: If order not found or cannot be cancelled
+            ValueError: If order_id is invalid
         """
         # Log request
         self._log_request("cancel_order", {"order_id": order_id})
@@ -463,9 +495,9 @@ class PaperBrokerProvider(BrokerProvider):
         
         order = self.orders[order_id]
         
-        # Check if order can be cancelled
-        if order.status in [OrderStatus.FILLED, OrderStatus.CANCELLED, OrderStatus.REJECTED]:
-            error_msg = f"Cannot cancel order with status: {order.status.value}"
+        # Can only cancel pending orders
+        if order.status not in [OrderStatus.PENDING, OrderStatus.PARTIALLY_FILLED]:
+            error_msg = f"Cannot cancel order with status {order.status.value}"
             self._log_error("cancel_order", error_msg)
             raise ValueError(error_msg)
         
@@ -476,7 +508,7 @@ class PaperBrokerProvider(BrokerProvider):
         # Log response
         self._log_response(
             "cancel_order",
-            {"order_id": order_id, "status": order.status.value},
+            {"order_id": order_id, "status": "cancelled"},
         )
         
         return order
@@ -485,29 +517,13 @@ class PaperBrokerProvider(BrokerProvider):
         """Get all open positions.
         
         Returns:
-            List of Position objects
+            List of Position objects for all open positions
         """
         # Log request
         self._log_request("get_positions", {})
         
-        # Update current prices and P&L
-        positions = []
-        for symbol, position in self.positions.items():
-            current_price = self._get_current_price(symbol)
-            position.current_price = current_price
-            position.market_value = position.quantity * current_price
-            position.unrealized_pl = (
-                position.market_value - (position.quantity * position.entry_price)
-                if position.side == PositionSide.LONG
-                else (position.quantity * position.entry_price) - position.market_value
-            )
-            position.unrealized_pl_pct = (
-                (position.unrealized_pl / (position.quantity * position.entry_price)) * 100
-                if position.entry_price > 0
-                else 0
-            )
-            position.updated_at = datetime.utcnow()
-            positions.append(position)
+        # Filter out zero-quantity positions
+        positions = [p for p in self.positions.values() if p.quantity != 0]
         
         # Log response
         self._log_response(
@@ -521,16 +537,13 @@ class PaperBrokerProvider(BrokerProvider):
         """Get account information.
         
         Returns:
-            Account object
+            Account object with current account state
         """
         # Log request
         self._log_request("get_account", {})
         
         # Calculate portfolio value
-        positions_value = sum(
-            p.quantity * self._get_current_price(p.symbol)
-            for p in self.positions.values()
-        )
+        positions_value = sum(p.market_value for p in self.positions.values())
         portfolio_value = self.cash + positions_value
         
         account = Account(
@@ -538,8 +551,8 @@ class PaperBrokerProvider(BrokerProvider):
             account_type="paper",
             cash=self.cash,
             portfolio_value=portfolio_value,
-            buying_power=self.cash * 4,  # 4x buying power for margin
-            multiplier=4.0,
+            buying_power=self.cash,  # In paper trading, buying power = cash
+            multiplier=1.0,
             equity=portfolio_value,
             last_equity=portfolio_value,
             status="active",
@@ -550,20 +563,19 @@ class PaperBrokerProvider(BrokerProvider):
         self._log_response(
             "get_account",
             {
-                "account_id": self.account_id,
                 "cash": self.cash,
                 "portfolio_value": portfolio_value,
-                "buying_power": account.buying_power,
+                "positions_count": len([p for p in self.positions.values() if p.quantity != 0]),
             },
         )
         
         return account
 
     def get_order(self, order_id: str) -> Optional[Order]:
-        """Get order by ID.
+        """Get order details by ID.
         
         Args:
-            order_id: ID of order to retrieve
+            order_id: ID of the order to retrieve
             
         Returns:
             Order object or None if not found
@@ -573,7 +585,6 @@ class PaperBrokerProvider(BrokerProvider):
         
         order = self.orders.get(order_id)
         
-        # Log response
         if order:
             self._log_response(
                 "get_order",
@@ -596,7 +607,7 @@ class PaperBrokerProvider(BrokerProvider):
             symbol: Optional filter by symbol
             
         Returns:
-            List of Order objects
+            List of Order objects matching filters
         """
         # Log request
         self._log_request(
@@ -606,74 +617,16 @@ class PaperBrokerProvider(BrokerProvider):
         
         orders = list(self.orders.values())
         
-        # Filter by status
-        if status is not None:
+        # Apply filters
+        if status:
             orders = [o for o in orders if o.status == status]
-        
-        # Filter by symbol
-        if symbol is not None:
+        if symbol:
             orders = [o for o in orders if o.symbol == symbol]
         
         # Log response
         self._log_response(
             "get_orders",
-            {"count": len(orders), "symbols": list(set(o.symbol for o in orders))},
+            {"count": len(orders), "statuses": list(set(o.status.value for o in orders))},
         )
         
         return orders
-
-    def _update_position(
-        self,
-        symbol: str,
-        quantity: int,
-        side: OrderSide,
-        price: float,
-    ) -> None:
-        """Update position after order fill.
-        
-        Args:
-            symbol: Stock symbol
-            quantity: Number of shares
-            side: BUY or SELL
-            price: Fill price
-        """
-        if symbol not in self.positions:
-            # Create new position
-            self.positions[symbol] = Position(
-                symbol=symbol,
-                quantity=quantity if side == OrderSide.BUY else -quantity,
-                side=PositionSide.LONG if side == OrderSide.BUY else PositionSide.SHORT,
-                entry_price=price,
-                current_price=price,
-                market_value=quantity * price,
-                unrealized_pl=0.0,
-                unrealized_pl_pct=0.0,
-                updated_at=datetime.utcnow(),
-            )
-        else:
-            # Update existing position
-            position = self.positions[symbol]
-            if side == OrderSide.BUY:
-                position.quantity += quantity
-            else:
-                position.quantity -= quantity
-            position.updated_at = datetime.utcnow()
-
-    def _update_cash(
-        self,
-        quantity: int,
-        side: OrderSide,
-        price: float,
-    ) -> None:
-        """Update cash balance after order fill.
-        
-        Args:
-            quantity: Number of shares
-            side: BUY or SELL
-            price: Fill price
-        """
-        cost = quantity * price
-        if side == OrderSide.BUY:
-            self.cash -= cost
-        else:
-            self.cash += cost

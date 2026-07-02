@@ -7,7 +7,7 @@ from typing import Optional, List, Dict
 from app.core.celery import celery_app
 from app.core.config import config
 from app.core.database import SessionLocal
-from app.core.broker_provider import BrokerProvider
+from app.core.broker_provider import BrokerProvider, OrderStatus
 from app.core.paper_broker_provider import PaperBrokerProvider
 from app.data_sources import (
     DataProvider,
@@ -323,195 +323,207 @@ def fetch_news(self, symbol: Optional[str] = None, limit: int = 10) -> dict:
                         "timestamp": datetime.utcnow().isoformat(),
                         "articles_fetched": 0,
                         "articles_stored": 0,
-                        "articles_duplicated": 0,
-                        "provider": provider.__class__.__name__,
                     }
             
-            articles_fetched = 0
-            articles_stored = 0
-            articles_duplicated = 0
-            errors = []
+            total_fetched = 0
+            total_stored = 0
             
             for sym in symbols_to_fetch:
                 try:
-                    logger.debug(f"Fetching news for symbol: {sym}")
                     # Fetch news from provider
                     articles = provider.get_news(sym, limit=limit)
-                    articles_fetched += len(articles)
+                    total_fetched += len(articles)
                     
-                    # Store articles in database with deduplication and sentiment analysis
                     for article in articles:
                         try:
-                            # Check if article already exists by URL (primary deduplication)
-                            if article.url:
-                                existing_by_url = db.query(NewsArticle).filter(
-                                    NewsArticle.url == article.url
-                                ).first()
-                                if existing_by_url:
-                                    logger.debug(f"Article already exists by URL: {article.url}")
-                                    articles_duplicated += 1
-                                    continue
-                            
-                            # Check if article already exists by title (secondary deduplication)
-                            existing_by_title = db.query(NewsArticle).filter(
-                                NewsArticle.symbol == sym,
-                                NewsArticle.title == article.title,
+                            # Check if article already exists
+                            existing = db.query(NewsArticle).filter(
+                                NewsArticle.url == article.get("url")
                             ).first()
-                            if existing_by_title:
-                                logger.debug(f"Article already exists by title: {article.title}")
-                                articles_duplicated += 1
+                            
+                            if existing:
                                 continue
                             
-                            # Perform sentiment analysis
-                            if config.SENTIMENT_ANALYSIS_ENABLED:
-                                # Combine title and description for analysis
-                                text_to_analyze = f"{article.title} {article.description or ''}".strip()
-                                
-                                sentiment_score, confidence_score = sentiment_analyzer.analyze(
-                                    text_to_analyze,
-                                    provider_sentiment=article.sentiment,
-                                )
-                                
-                                article.sentiment_score = sentiment_score
-                                article.confidence_score = confidence_score
-                                
-                                logger.debug(
-                                    f"Sentiment analysis for '{article.title[:50]}...': "
-                                    f"score={sentiment_score:.3f}, confidence={confidence_score:.3f}"
-                                )
+                            # Analyze sentiment
+                            sentiment_result = sentiment_analyzer.analyze(article.get("description", ""))
                             
-                            # Store article in database
-                            db.add(article)
-                            db.commit()
-                            articles_stored += 1
-                            logger.debug(f"Stored article: {article.title[:50]}...")
-                            
+                            # Store article
+                            news_article = NewsArticle(
+                                symbol=sym,
+                                title=article.get("title", ""),
+                                description=article.get("description"),
+                                url=article.get("url"),
+                                source=article.get("source"),
+                                published_at=article.get("published_at"),
+                                sentiment=sentiment_result.get("sentiment"),
+                                sentiment_score=sentiment_result.get("score"),
+                                confidence_score=sentiment_result.get("confidence"),
+                                provider=provider.__class__.__name__,
+                            )
+                            db.add(news_article)
+                            total_stored += 1
                         except Exception as e:
-                            logger.warning(f"Error storing article: {e}")
-                            db.rollback()
-                            errors.append(str(e))
+                            logger.warning(f"Error storing article for {sym}: {e}")
                             continue
                     
+                    db.commit()
                 except Exception as e:
                     logger.warning(f"Error fetching news for {sym}: {e}")
-                    errors.append(f"{sym}: {str(e)}")
+                    db.rollback()
                     continue
             
             result = {
                 "status": "success",
-                "symbol": symbol,
                 "timestamp": datetime.utcnow().isoformat(),
-                "articles_fetched": articles_fetched,
-                "articles_stored": articles_stored,
-                "articles_duplicated": articles_duplicated,
-                "provider": provider.__class__.__name__,
-                "sentiment_analysis_enabled": config.SENTIMENT_ANALYSIS_ENABLED,
+                "symbols_processed": len(symbols_to_fetch),
+                "articles_fetched": total_fetched,
+                "articles_stored": total_stored,
             }
-            
-            if errors:
-                result["errors"] = errors
-            
             logger.info(f"News fetch completed: {result}")
             return result
-            
         finally:
             db.close()
             
     except Exception as exc:
         logger.error(f"News fetch failed: {exc}", exc_info=True)
-        # Retry with exponential backoff
         raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
 
 
 @celery_app.task(
-    name="app.workers.tasks.generate_signals",
+    name="app.workers.tasks.poll_order_status",
     bind=True,
-    max_retries=3,
-    default_retry_delay=60,
+    max_retries=5,
+    default_retry_delay=30,
 )
-def generate_signals(self, user_id: Optional[int] = None) -> dict:
-    """Generate trading signals for watched symbols.
+def poll_order_status(self, trade_id: int) -> dict:
+    """Poll broker for order status and update Trade record.
+    
+    Checks the status of a submitted paper order and updates the Trade model
+    with the latest order status, fill information, and any error messages.
     
     Args:
-        user_id: Optional specific user to generate signals for. If None, generate for all.
+        trade_id: ID of the Trade record to poll
         
     Returns:
-        Dictionary with generation results
+        Dictionary with polling results
     """
     try:
-        logger.info(f"Starting signal generation for user_id={user_id}")
+        logger.info(f"Polling order status for trade_id={trade_id}")
         
         db = SessionLocal()
+        broker = get_broker_provider()
         
         try:
-            # TODO: Implement signal generation logic
+            # Get trade record
+            trade = db.query(Trade).filter(Trade.id == trade_id).first()
+            if not trade:
+                logger.error(f"Trade not found: {trade_id}")
+                return {"status": "error", "message": "Trade not found"}
+            
+            # Get broker order
+            if not trade.broker_order_id:
+                logger.warning(f"Trade {trade_id} has no broker_order_id")
+                return {"status": "error", "message": "No broker order ID"}
+            
+            broker_order = broker.get_order(trade.broker_order_id)
+            if not broker_order:
+                logger.warning(f"Broker order not found: {trade.broker_order_id}")
+                return {"status": "error", "message": "Broker order not found"}
+            
+            # Update trade with broker order status
+            trade.order_status = broker_order.status.value
+            
+            if broker_order.status == OrderStatus.FILLED:
+                trade.status = "filled"
+                trade.entry_price = broker_order.filled_price
+                trade.opened_at = broker_order.created_at or datetime.utcnow()
+                logger.info(f"Trade {trade_id} filled at ${broker_order.filled_price}")
+            
+            elif broker_order.status == OrderStatus.PARTIALLY_FILLED:
+                trade.status = "partially_filled"
+                trade.entry_price = broker_order.filled_price
+                logger.info(f"Trade {trade_id} partially filled: {broker_order.filled_quantity}/{broker_order.quantity}")
+            
+            elif broker_order.status == OrderStatus.CANCELLED:
+                trade.status = "cancelled"
+                logger.info(f"Trade {trade_id} cancelled")
+            
+            elif broker_order.status == OrderStatus.REJECTED:
+                trade.status = "rejected"
+                trade.error_message = broker_order.error_message or "Order rejected by broker"
+                logger.warning(f"Trade {trade_id} rejected: {trade.error_message}")
+            
+            elif broker_order.status == OrderStatus.EXPIRED:
+                trade.status = "cancelled"
+                trade.error_message = "Order expired"
+                logger.warning(f"Trade {trade_id} expired")
+            
+            # Update timestamp
+            trade.updated_at = datetime.utcnow()
+            db.commit()
+            
             result = {
                 "status": "success",
-                "user_id": user_id,
-                "timestamp": datetime.utcnow().isoformat(),
-                "signals_generated": 0,
+                "trade_id": trade_id,
+                "order_status": broker_order.status.value,
+                "trade_status": trade.status,
+                "filled_price": broker_order.filled_price,
+                "filled_quantity": broker_order.filled_quantity,
             }
-            logger.info(f"Signal generation completed: {result}")
+            logger.info(f"Order status poll completed: {result}")
             return result
+        
         finally:
             db.close()
             
     except Exception as exc:
-        logger.error(f"Signal generation failed: {exc}", exc_info=True)
-        raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
+        logger.error(f"Order status poll failed: {exc}", exc_info=True)
+        raise self.retry(exc=exc, countdown=30 * (2 ** self.request.retries))
 
 
 @celery_app.task(
-    name="app.workers.tasks.monitor_trades",
+    name="app.workers.tasks.monitor_broker_positions",
     bind=True,
     max_retries=3,
     default_retry_delay=60,
 )
-def monitor_trades(self, user_id: Optional[int] = None) -> dict:
-    """Monitor open trades and update their status.
+def monitor_broker_positions(self) -> dict:
+    """Monitor broker positions and update account status.
     
-    Args:
-        user_id: Optional specific user to monitor. If None, monitor all.
-        
+    Periodically checks broker positions and account status to ensure
+    paper trading state is synchronized with broker provider.
+    
     Returns:
         Dictionary with monitoring results
     """
     try:
-        logger.info(f"Starting trade monitoring for user_id={user_id}")
+        logger.info("Starting broker position monitoring")
         
-        db = SessionLocal()
+        broker = get_broker_provider()
         
-        try:
-            # TODO: Implement trade monitoring logic
-            result = {
-                "status": "success",
-                "user_id": user_id,
-                "timestamp": datetime.utcnow().isoformat(),
-                "trades_monitored": 0,
-            }
-            logger.info(f"Trade monitoring completed: {result}")
-            return result
-        finally:
-            db.close()
-            
+        # Get current positions
+        positions = broker.get_positions()
+        account = broker.get_account()
+        
+        result = {
+            "status": "success",
+            "timestamp": datetime.utcnow().isoformat(),
+            "positions_count": len(positions),
+            "account_cash": account.cash,
+            "portfolio_value": account.portfolio_value,
+            "positions": [
+                {
+                    "symbol": p.symbol,
+                    "quantity": p.quantity,
+                    "market_value": p.market_value,
+                    "unrealized_pl": p.unrealized_pl,
+                }
+                for p in positions
+            ],
+        }
+        logger.info(f"Broker position monitoring completed: {result}")
+        return result
+        
     except Exception as exc:
-        logger.error(f"Trade monitoring failed: {exc}", exc_info=True)
+        logger.error(f"Broker position monitoring failed: {exc}", exc_info=True)
         raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
-
-
-@celery_app.task(
-    name="app.workers.tasks.fetch_news_for_watchlist",
-    bind=True,
-    max_retries=3,
-    default_retry_delay=60,
-)
-def fetch_news_for_watchlist(self) -> dict:
-    """Scheduled task to fetch news for all watchlist symbols.
-    
-    This is the main entry point for the scheduled news fetching job.
-    
-    Returns:
-        Dictionary with fetch results
-    """
-    logger.info("Starting scheduled news fetch for watchlist")
-    return fetch_news.apply_async(args=[None, 10]).get()
