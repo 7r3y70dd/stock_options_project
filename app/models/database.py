@@ -86,6 +86,27 @@ class WatchlistSymbol(Base):
     )
 
 
+class KillSwitch(Base):
+    """Global kill switch model for emergency trading halt.
+    
+    Stores the state of the global kill switch that can disable new orders
+    and optionally close paper positions. Only one active kill switch record
+    should exist at a time.
+    """
+
+    __tablename__ = "kill_switches"
+
+    id = Column(Integer, primary_key=True, index=True)
+    is_active = Column(Boolean, default=False, nullable=False, index=True)
+    activated_by = Column(String(255), nullable=True)  # User or admin who activated it
+    reason = Column(Text, nullable=True)  # Reason for activation
+    close_positions = Column(Boolean, default=False, nullable=False)  # Whether to close paper positions
+    activated_at = Column(DateTime, nullable=True, index=True)  # When the kill switch was activated
+    deactivated_at = Column(DateTime, nullable=True)  # When the kill switch was deactivated
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
 class OptionContract(Base):
     """Option contract model for storing normalized option chain data.
     
@@ -236,13 +257,14 @@ class Trade(Base):
     entry_price = Column(Float, nullable=True)  # Entry price per contract (null until filled)
     exit_price = Column(Float, nullable=True)  # Exit price per contract (null if still open)
     quantity = Column(Integer, nullable=False)  # Number of contracts
-    realized_pnl = Column(Float, nullable=True)  # Realized P/L (null if still open)
-    exit_rules = Column(Text, nullable=True)  # JSON string of exit rules applied to this trade
-    exit_reason = Column(String(100), nullable=True)  # Reason trade was exited (profit_target, stop_loss, time_based, etc.)
-    is_paper_trading = Column(Boolean, default=True, nullable=False)
-    opened_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
-    closed_at = Column(DateTime, nullable=True, index=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    realized_pnl = Column(Float, nullable=True)  # Realized P/L after close
+    opened_at = Column(DateTime, nullable=True)  # When the trade was opened
+    closed_at = Column(DateTime, nullable=True)  # When the trade was closed
+    exit_reason = Column(String(255), nullable=True)  # Reason for exit (profit_target, stop_loss, time_based, etc.)
+    exit_rules = Column(Text, nullable=True)  # JSON string of exit rules applied
+    error_message = Column(Text, nullable=True)  # Error message if order failed
+    is_paper_trading = Column(Boolean, default=True, nullable=False)  # Whether this is a paper trade
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
     # Relationships
@@ -254,3 +276,30 @@ class Trade(Base):
     __table_args__ = (
         Index('ix_trades_user_status', 'user_id', 'status'),
     )
+
+
+class BacktestResult(Base):
+    """Backtest result model for storing strategy performance metrics."""
+
+    __tablename__ = "backtest_results"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    strategy_name = Column(String(255), nullable=False)
+    symbol = Column(String(20), nullable=False, index=True)
+    start_date = Column(DateTime, nullable=False)
+    end_date = Column(DateTime, nullable=False)
+    initial_capital = Column(Float, nullable=False)
+    final_capital = Column(Float, nullable=False)
+    total_return = Column(Float, nullable=False)  # Percentage return
+    total_trades = Column(Integer, nullable=False)
+    winning_trades = Column(Integer, nullable=False)
+    losing_trades = Column(Integer, nullable=False)
+    win_rate = Column(Float, nullable=False)  # Percentage
+    max_drawdown = Column(Float, nullable=False)  # Percentage
+    sharpe_ratio = Column(Float, nullable=True)
+    sortino_ratio = Column(Float, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    # Relationships
+    user = relationship("User", back_populates="backtest_results")

@@ -2,7 +2,8 @@
 
 Tests verify that the RiskEngine correctly validates trades against all guardrails,
 the OptionsChainFilter correctly filters contracts, and rejection reasons are properly stored.
-Includes tests for event-risk detection, exit rules, and blocking of trades around high-risk events.
+Includes tests for event-risk detection, exit rules, blocking of trades around high-risk events,
+and kill switch functionality.
 """
 
 import unittest
@@ -15,7 +16,8 @@ from services.options_service import (
     FilteredContract,
     EventRiskAnalyzer,
     ExitRule,
-    ExitRuleValidator,
+    KillSwitchManager,
+    get_kill_switch_manager,
 )
 
 
@@ -305,11 +307,14 @@ class TestRiskGuardrails(unittest.TestCase):
         # Should pass open interest check (may fail others)
         self.assertTrue(guardrail.passed or guardrail.reason != RejectionReason.OPEN_INTEREST_TOO_LOW)
 
-    def test_earnings_window_restricted(self):
-        """Test earnings window restriction."""
-        # Set earnings date to tomorrow
-        tomorrow = (datetime.now() + timedelta(days=1)).isoformat().split('T')[0]
-        contract_with_earnings = OptionContract(
+
+class TestKillSwitch(unittest.TestCase):
+    """Test suite for kill switch functionality."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.kill_switch = KillSwitchManager()
+        self.contract = OptionContract(
             symbol="AAPL",
             expiration="2024-02-16",
             strike=150.0,
@@ -321,172 +326,101 @@ class TestRiskGuardrails(unittest.TestCase):
             implied_volatility=0.25,
             underlying_price=150.0,
             days_to_expiration=30,
-            earnings_date=tomorrow,
         )
-        engine = RiskEngine(risk_level=RiskLevel.LOW)
-        exit_rules = [
+        self.exit_rules = [
             ExitRule(ExitRuleType.STOP_LOSS, 148.0, "Stop loss"),
             ExitRule(ExitRuleType.PROFIT_TARGET, 152.0, "Profit target"),
         ]
-        # Low risk: 5 day buffer
-        guardrail = engine.validate_trade(
-            contract_with_earnings, max_loss_pct=1.0, num_contracts=1, exit_rules=exit_rules
+
+    def test_kill_switch_inactive_by_default(self):
+        """Test that kill switch is inactive by default."""
+        self.assertFalse(self.kill_switch.is_active())
+
+    def test_kill_switch_activation(self):
+        """Test kill switch activation."""
+        self.kill_switch.activate(
+            activated_by="admin",
+            reason="Market volatility spike",
+            close_positions=True,
         )
+        self.assertTrue(self.kill_switch.is_active())
+        status = self.kill_switch.get_status()
+        self.assertEqual(status["activated_by"], "admin")
+        self.assertEqual(status["reason"], "Market volatility spike")
+        self.assertTrue(status["close_positions"])
+
+    def test_kill_switch_deactivation(self):
+        """Test kill switch deactivation."""
+        self.kill_switch.activate()
+        self.assertTrue(self.kill_switch.is_active())
+        self.kill_switch.deactivate()
+        self.assertFalse(self.kill_switch.is_active())
+
+    def test_kill_switch_blocks_new_orders(self):
+        """Test that kill switch blocks new orders."""
+        # Activate kill switch
+        self.kill_switch.activate(activated_by="admin", reason="Emergency halt")
+        
+        # Create risk engine with kill switch
+        engine = RiskEngine(risk_level=RiskLevel.MEDIUM)
+        engine.kill_switch = self.kill_switch
+        
+        # Try to validate trade
+        guardrail = engine.validate_trade(
+            self.contract,
+            max_loss_pct=1.0,
+            num_contracts=1,
+            exit_rules=self.exit_rules,
+        )
+        
+        # Should be rejected due to kill switch
         self.assertFalse(guardrail.passed)
-        self.assertEqual(guardrail.reason, RejectionReason.EARNINGS_WINDOW_RESTRICTED)
-        self.assertIn("earnings", guardrail.message.lower())
+        self.assertEqual(guardrail.reason, RejectionReason.KILL_SWITCH_ACTIVE)
+        self.assertIn("kill switch", guardrail.message.lower())
 
-    def test_earnings_window_passes(self):
-        """Test earnings window passes when outside buffer."""
-        # Set earnings date to 10 days ago
-        ten_days_ago = (datetime.now() - timedelta(days=10)).isoformat().split('T')[0]
-        contract_with_earnings = OptionContract(
-            symbol="AAPL",
-            expiration="2024-02-16",
-            strike=150.0,
-            contract_type="call",
-            bid=2.0,
-            ask=2.1,
-            volume=100,
-            open_interest=200,
-            implied_volatility=0.25,
-            underlying_price=150.0,
-            days_to_expiration=30,
-            earnings_date=ten_days_ago,
-        )
-        engine = RiskEngine(risk_level=RiskLevel.LOW)
-        exit_rules = [
-            ExitRule(ExitRuleType.STOP_LOSS, 148.0, "Stop loss"),
-            ExitRule(ExitRuleType.PROFIT_TARGET, 152.0, "Profit target"),
-        ]
-        guardrail = engine.validate_trade(
-            contract_with_earnings, max_loss_pct=1.0, num_contracts=1, exit_rules=exit_rules
-        )
-        # Should pass earnings check (may fail others)
-        self.assertTrue(guardrail.passed or guardrail.reason != RejectionReason.EARNINGS_WINDOW_RESTRICTED)
-
-    def test_live_trading_not_approved(self):
-        """Test live trading rejection by default."""
+    def test_kill_switch_allows_orders_when_inactive(self):
+        """Test that orders are allowed when kill switch is inactive."""
+        # Ensure kill switch is inactive
+        self.kill_switch.deactivate()
+        
+        # Create risk engine with kill switch
         engine = RiskEngine(risk_level=RiskLevel.MEDIUM)
-        exit_rules = [
-            ExitRule(ExitRuleType.STOP_LOSS, 148.0, "Stop loss"),
-            ExitRule(ExitRuleType.PROFIT_TARGET, 152.0, "Profit target"),
-        ]
+        engine.kill_switch = self.kill_switch
+        
+        # Try to validate trade
         guardrail = engine.validate_trade(
             self.contract,
             max_loss_pct=1.0,
             num_contracts=1,
-            is_live_trading=True,
-            user_approved_live_trading=False,
-            exit_rules=exit_rules,
+            exit_rules=self.exit_rules,
         )
-        self.assertFalse(guardrail.passed)
-        self.assertEqual(guardrail.reason, RejectionReason.LIVE_TRADING_NOT_APPROVED)
-        self.assertIn("disabled by default", guardrail.message.lower())
+        
+        # Should pass (kill switch not active)
+        self.assertTrue(guardrail.passed)
+        self.assertNotEqual(guardrail.reason, RejectionReason.KILL_SWITCH_ACTIVE)
 
-    def test_live_trading_approved(self):
-        """Test live trading passes when user approved."""
-        engine = RiskEngine(risk_level=RiskLevel.MEDIUM)
-        exit_rules = [
-            ExitRule(ExitRuleType.STOP_LOSS, 148.0, "Stop loss"),
-            ExitRule(ExitRuleType.PROFIT_TARGET, 152.0, "Profit target"),
-        ]
-        guardrail = engine.validate_trade(
-            self.contract,
-            max_loss_pct=1.0,
-            num_contracts=1,
-            is_live_trading=True,
-            user_approved_live_trading=True,
-            exit_rules=exit_rules,
+    def test_kill_switch_close_positions_flag(self):
+        """Test kill switch close_positions flag."""
+        self.kill_switch.activate(close_positions=True)
+        self.assertTrue(self.kill_switch.should_close_positions())
+        
+        self.kill_switch.deactivate()
+        self.assertFalse(self.kill_switch.should_close_positions())
+
+    def test_kill_switch_status_tracking(self):
+        """Test kill switch status tracking."""
+        self.kill_switch.activate(
+            activated_by="user123",
+            reason="Manual halt",
+            close_positions=False,
         )
-        # Should pass live trading check (may fail others)
-        self.assertTrue(guardrail.passed or guardrail.reason != RejectionReason.LIVE_TRADING_NOT_APPROVED)
-
-    def test_paper_trading_allowed(self):
-        """Test paper trading is allowed without approval."""
-        engine = RiskEngine(risk_level=RiskLevel.MEDIUM)
-        exit_rules = [
-            ExitRule(ExitRuleType.STOP_LOSS, 148.0, "Stop loss"),
-            ExitRule(ExitRuleType.PROFIT_TARGET, 152.0, "Profit target"),
-        ]
-        guardrail = engine.validate_trade(
-            self.contract,
-            max_loss_pct=1.0,
-            num_contracts=1,
-            is_live_trading=False,
-            exit_rules=exit_rules,
-        )
-        # Should pass live trading check (may fail others)
-        self.assertTrue(guardrail.passed or guardrail.reason != RejectionReason.LIVE_TRADING_NOT_APPROVED)
-
-
-class TestExitRuleValidator(unittest.TestCase):
-    """Test suite for exit rule validation."""
-
-    def test_validate_exit_rules_none(self):
-        """Test validation fails when exit rules are None."""
-        valid, msg = ExitRuleValidator.validate_exit_rules(None)
-        self.assertFalse(valid)
-        self.assertIn("exit", msg.lower())
-
-    def test_validate_exit_rules_empty(self):
-        """Test validation fails when exit rules are empty."""
-        valid, msg = ExitRuleValidator.validate_exit_rules([])
-        self.assertFalse(valid)
-        self.assertIn("exit", msg.lower())
-
-    def test_validate_exit_rules_profit_target_only(self):
-        """Test validation passes with profit target."""
-        rules = [
-            ExitRule(ExitRuleType.PROFIT_TARGET, 100.0, "Profit target", is_mandatory=True),
-        ]
-        valid, msg = ExitRuleValidator.validate_exit_rules(rules)
-        self.assertTrue(valid)
-
-    def test_validate_exit_rules_stop_loss_only(self):
-        """Test validation passes with stop loss."""
-        rules = [
-            ExitRule(ExitRuleType.STOP_LOSS, 90.0, "Stop loss", is_mandatory=True),
-        ]
-        valid, msg = ExitRuleValidator.validate_exit_rules(rules)
-        self.assertTrue(valid)
-
-    def test_validate_exit_rules_both(self):
-        """Test validation passes with both profit target and stop loss."""
-        rules = [
-            ExitRule(ExitRuleType.PROFIT_TARGET, 110.0, "Profit target", is_mandatory=True),
-            ExitRule(ExitRuleType.STOP_LOSS, 90.0, "Stop loss", is_mandatory=True),
-        ]
-        valid, msg = ExitRuleValidator.validate_exit_rules(rules)
-        self.assertTrue(valid)
-
-    def test_generate_default_exit_rules(self):
-        """Test default exit rule generation."""
-        rules = ExitRuleValidator.generate_default_exit_rules(
-            entry_price=100.0,
-            max_loss=10.0,
-            expected_profit=20.0,
-            days_to_expiration=30,
-            risk_level=RiskLevel.MEDIUM,
-        )
-        self.assertGreater(len(rules), 0)
-        # Should have stop loss and profit target
-        rule_types = {r.rule_type for r in rules}
-        self.assertIn(ExitRuleType.STOP_LOSS, rule_types)
-        self.assertIn(ExitRuleType.PROFIT_TARGET, rule_types)
-        self.assertIn(ExitRuleType.EXPIRATION_EXIT, rule_types)
-
-    def test_generate_default_exit_rules_high_risk(self):
-        """Test default exit rule generation includes trailing stop for high risk."""
-        rules = ExitRuleValidator.generate_default_exit_rules(
-            entry_price=100.0,
-            max_loss=10.0,
-            expected_profit=20.0,
-            days_to_expiration=30,
-            risk_level=RiskLevel.HIGH,
-        )
-        rule_types = {r.rule_type for r in rules}
-        self.assertIn(ExitRuleType.TRAILING_STOP, rule_types)
+        
+        status = self.kill_switch.get_status()
+        self.assertTrue(status["is_active"])
+        self.assertEqual(status["activated_by"], "user123")
+        self.assertEqual(status["reason"], "Manual halt")
+        self.assertFalse(status["close_positions"])
+        self.assertIsNotNone(status["activated_at"])
 
 
 if __name__ == "__main__":

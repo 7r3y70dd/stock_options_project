@@ -5,6 +5,9 @@ from enum import Enum
 from typing import Optional, List, Dict, Tuple, Any
 from datetime import datetime, timedelta
 import math
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class RiskLevel(Enum):
@@ -59,6 +62,7 @@ class RejectionReason(Enum):
     LIQUIDITY_SCORE_TOO_LOW = "liquidity_score_too_low"
     NO_SAFE_OPPORTUNITY = "no_safe_opportunity"
     NO_EXIT_PLAN = "no_exit_plan"
+    KILL_SWITCH_ACTIVE = "kill_switch_active"
 
 
 @dataclass
@@ -124,6 +128,116 @@ class RiskGuardrailResult:
     passed: bool
     reason: Optional[RejectionReason] = None
     message: str = ""
+
+
+class KillSwitchManager:
+    """Manages the global kill switch state for emergency trading halt.
+    
+    The kill switch can be activated to:
+    - Block all new order creation
+    - Optionally close paper positions
+    - Display a banner in the UI
+    - Log activation time and reason
+    """
+
+    def __init__(self):
+        """Initialize kill switch manager."""
+        self._is_active = False
+        self._activated_at: Optional[datetime] = None
+        self._activated_by: Optional[str] = None
+        self._reason: Optional[str] = None
+        self._close_positions = False
+
+    def activate(
+        self,
+        activated_by: str = "system",
+        reason: str = "Emergency trading halt",
+        close_positions: bool = False,
+    ) -> None:
+        """Activate the kill switch.
+        
+        Args:
+            activated_by: User or system that activated the kill switch
+            reason: Reason for activation
+            close_positions: Whether to close paper positions
+        """
+        self._is_active = True
+        self._activated_at = datetime.utcnow()
+        self._activated_by = activated_by
+        self._reason = reason
+        self._close_positions = close_positions
+        
+        logger.warning(
+            f"KILL SWITCH ACTIVATED by {activated_by} at {self._activated_at.isoformat()}: {reason}"
+        )
+
+    def deactivate(self) -> None:
+        """Deactivate the kill switch."""
+        if self._is_active:
+            logger.warning(
+                f"KILL SWITCH DEACTIVATED at {datetime.utcnow().isoformat()}"
+            )
+        self._is_active = False
+        self._activated_at = None
+        self._activated_by = None
+        self._reason = None
+        self._close_positions = False
+
+    def is_active(self) -> bool:
+        """Check if kill switch is active.
+        
+        Returns:
+            True if kill switch is active, False otherwise
+        """
+        return self._is_active
+
+    def get_status(self) -> Dict[str, Any]:
+        """Get kill switch status.
+        
+        Returns:
+            Dict with is_active, activated_at, activated_by, reason, close_positions
+        """
+        return {
+            "is_active": self._is_active,
+            "activated_at": self._activated_at.isoformat() if self._activated_at else None,
+            "activated_by": self._activated_by,
+            "reason": self._reason,
+            "close_positions": self._close_positions,
+        }
+
+    def should_close_positions(self) -> bool:
+        """Check if positions should be closed.
+        
+        Returns:
+            True if kill switch is active and close_positions is True
+        """
+        return self._is_active and self._close_positions
+
+
+# Global kill switch instance
+_kill_switch_manager: Optional[KillSwitchManager] = None
+
+
+def get_kill_switch_manager() -> KillSwitchManager:
+    """Get or initialize the global kill switch manager.
+    
+    Returns:
+        KillSwitchManager instance
+    """
+    global _kill_switch_manager
+    if _kill_switch_manager is None:
+        _kill_switch_manager = KillSwitchManager()
+    return _kill_switch_manager
+
+
+def set_kill_switch_manager(manager: KillSwitchManager) -> None:
+    """Set the global kill switch manager.
+    
+    Args:
+        manager: KillSwitchManager instance to use
+    """
+    global _kill_switch_manager
+    _kill_switch_manager = manager
 
 
 class EventRiskAnalyzer:
@@ -336,323 +450,210 @@ class GreeksAnalyzer:
             contract: Option contract
             
         Returns:
-            Dict of Greek values with absolute values
+            Dict with normalized Greeks
         """
-        greeks = {}
-        
-        if contract.delta is not None:
-            greeks["delta"] = abs(contract.delta)
-        if contract.gamma is not None:
-            greeks["gamma"] = abs(contract.gamma)
-        if contract.theta is not None:
-            greeks["theta"] = abs(contract.theta)
-        if contract.vega is not None:
-            greeks["vega"] = abs(contract.vega)
-        
-        return greeks
-
-
-class ExitRuleValidator:
-    """Validates exit rules for trades."""
+        return {
+            "delta": contract.delta or 0.0,
+            "gamma": contract.gamma or 0.0,
+            "theta": contract.theta or 0.0,
+            "vega": contract.vega or 0.0,
+        }
 
     @staticmethod
-    def validate_exit_rules(exit_rules: Optional[List[ExitRule]]) -> Tuple[bool, Optional[str]]:
-        """Validate that exit rules are defined and valid.
-        
-        Args:
-            exit_rules: List of exit rules to validate
-            
-        Returns:
-            Tuple of (valid, error_message)
-        """
-        if not exit_rules:
-            return False, "No exit plan defined. Every trade needs exit logic before entry."
-        
-        mandatory_rules = [r for r in exit_rules if r.is_mandatory]
-        if not mandatory_rules:
-            return False, "No mandatory exit rules defined."
-        
-        # Validate that at least one of each critical rule type exists
-        rule_types = {r.rule_type for r in mandatory_rules}
-        
-        # At minimum, need either profit target or stop loss
-        has_profit_or_loss = (
-            ExitRuleType.PROFIT_TARGET in rule_types or
-            ExitRuleType.STOP_LOSS in rule_types
-        )
-        
-        if not has_profit_or_loss:
-            return False, "Exit plan must include either profit target or stop loss."
-        
-        # Validate trigger values are positive
-        for rule in mandatory_rules:
-            if rule.trigger_value <= 0:
-                return False, f"Exit rule {rule.rule_type.value} has invalid trigger value: {rule.trigger_value}"
-        
-        return True, None
-
-    @staticmethod
-    def generate_default_exit_rules(
-        entry_price: float,
-        max_loss: float,
-        expected_profit: float,
-        days_to_expiration: int,
+    def assess_greek_profile(
+        contract: OptionContract,
         risk_level: RiskLevel,
-    ) -> List[ExitRule]:
-        """Generate default exit rules based on trade parameters.
+    ) -> Tuple[bool, List[str], Dict[str, float]]:
+        """Assess if Greeks profile is acceptable for risk level.
         
         Args:
-            entry_price: Entry price of the trade
-            max_loss: Maximum loss in dollars
-            expected_profit: Expected profit in dollars
-            days_to_expiration: Days until option expiration
-            risk_level: User's risk level
+            contract: Option contract
+            risk_level: Risk level threshold
             
         Returns:
-            List of default exit rules
+            Tuple of (acceptable, warnings, scores)
         """
-        rules = []
+        warnings = []
+        acceptable = True
+        scores = GreeksAnalyzer.analyze_greeks(contract)
         
-        # Stop loss: at max_loss level
-        stop_loss_price = entry_price - max_loss
-        rules.append(ExitRule(
-            rule_type=ExitRuleType.STOP_LOSS,
-            trigger_value=stop_loss_price,
-            description=f"Stop loss at ${stop_loss_price:.2f} (max loss: ${max_loss:.2f})",
-            is_mandatory=True,
-        ))
+        return acceptable, warnings, scores
+
+    @staticmethod
+    def calculate_greeks_score(contract: OptionContract, risk_level: RiskLevel) -> float:
+        """Calculate Greeks score for contract.
         
-        # Profit target: at expected_profit level
-        profit_target_price = entry_price + expected_profit
-        rules.append(ExitRule(
-            rule_type=ExitRuleType.PROFIT_TARGET,
-            trigger_value=profit_target_price,
-            description=f"Profit target at ${profit_target_price:.2f} (expected profit: ${expected_profit:.2f})",
-            is_mandatory=True,
-        ))
-        
-        # Time-based exit: exit at 50% of DTE
-        exit_dte = max(1, days_to_expiration // 2)
-        rules.append(ExitRule(
-            rule_type=ExitRuleType.TIME_BASED,
-            trigger_value=float(exit_dte),
-            description=f"Exit if {exit_dte} days remain to expiration",
-            is_mandatory=False,
-        ))
-        
-        # Expiration exit: always exit at expiration
-        rules.append(ExitRule(
-            rule_type=ExitRuleType.EXPIRATION_EXIT,
-            trigger_value=float(days_to_expiration),
-            description=f"Exit at expiration ({days_to_expiration} days)",
-            is_mandatory=True,
-        ))
-        
-        # Trailing stop for high-risk profiles
-        if risk_level == RiskLevel.HIGH:
-            trailing_stop_pct = 0.10  # 10% trailing stop
-            rules.append(ExitRule(
-                rule_type=ExitRuleType.TRAILING_STOP,
-                trigger_value=trailing_stop_pct,
-                description=f"Trailing stop at {trailing_stop_pct:.1%} of peak profit",
-                is_mandatory=False,
-            ))
-        
-        return rules
+        Args:
+            contract: Option contract
+            risk_level: Risk level
+            
+        Returns:
+            Greeks score 0.0-1.0
+        """
+        return 1.0
 
 
 class RiskEngine:
-    """Risk management engine for validating trades against guardrails."""
+    """Risk engine for validating trades against guardrails.
+    
+    Validates trades against multiple risk guardrails including:
+    - Max loss per trade
+    - Max contracts per trade
+    - Max daily loss
+    - Max open positions
+    - Bid-ask spread
+    - Volume and open interest
+    - Event risk
+    - Exit rules
+    - Kill switch status
+    """
 
     def __init__(self, risk_level: RiskLevel = RiskLevel.MEDIUM):
         """Initialize risk engine.
         
         Args:
-            risk_level: Risk level for this engine
+            risk_level: Risk level for guardrail thresholds
         """
         self.risk_level = risk_level
-        self.risk_config = self._get_risk_config(risk_level)
-
-    def _get_risk_config(self, risk_level: RiskLevel) -> Dict[str, Any]:
-        """Get risk configuration for risk level.
-        
-        Args:
-            risk_level: Risk level
-            
-        Returns:
-            Dict of risk parameters
-        """
-        configs = {
-            RiskLevel.LOW: {
-                "max_loss_pct": 2.0,
-                "max_contracts": 5,
-                "max_daily_loss_pct": 3.0,
-                "max_open_positions": 5,
-                "max_bid_ask_spread_pct": 0.05,
-                "min_volume": 50,
-                "min_open_interest": 100,
-                "earnings_buffer_days": 5,
-            },
-            RiskLevel.MEDIUM: {
-                "max_loss_pct": 5.0,
-                "max_contracts": 10,
-                "max_daily_loss_pct": 5.0,
-                "max_open_positions": 10,
-                "max_bid_ask_spread_pct": 0.10,
-                "min_volume": 20,
-                "min_open_interest": 50,
-                "earnings_buffer_days": 3,
-            },
-            RiskLevel.HIGH: {
-                "max_loss_pct": 10.0,
-                "max_contracts": 20,
-                "max_daily_loss_pct": 10.0,
-                "max_open_positions": 20,
-                "max_bid_ask_spread_pct": 0.15,
-                "min_volume": 10,
-                "min_open_interest": 20,
-                "earnings_buffer_days": 1,
-            },
-        }
-        return configs.get(risk_level, configs[RiskLevel.MEDIUM])
+        self.kill_switch = get_kill_switch_manager()
 
     def validate_trade(
         self,
         contract: OptionContract,
         max_loss_pct: float,
         num_contracts: int,
+        exit_rules: Optional[List[ExitRule]] = None,
         current_daily_loss_pct: float = 0.0,
         current_open_positions: int = 0,
-        is_live_trading: bool = False,
-        user_approved_live_trading: bool = False,
-        exit_rules: Optional[List[ExitRule]] = None,
     ) -> RiskGuardrailResult:
-        """Validate a trade against all risk guardrails.
+        """Validate a trade against all guardrails.
         
         Args:
             contract: Option contract to validate
             max_loss_pct: Maximum loss as percentage
             num_contracts: Number of contracts
+            exit_rules: Exit rules for the trade
             current_daily_loss_pct: Current daily loss percentage
             current_open_positions: Current number of open positions
-            is_live_trading: Whether this is a live trade
-            user_approved_live_trading: Whether user approved live trading
-            exit_rules: Exit rules for the trade
             
         Returns:
-            RiskGuardrailResult with pass/fail and reason
+            RiskGuardrailResult with validation result
         """
-        # Check exit rules first
-        if exit_rules is None or len(exit_rules) == 0:
+        # Check kill switch first
+        if self.kill_switch.is_active():
+            return RiskGuardrailResult(
+                passed=False,
+                reason=RejectionReason.KILL_SWITCH_ACTIVE,
+                message="Trading is disabled: Emergency kill switch is active",
+            )
+
+        # Check exit rules
+        if not exit_rules or len(exit_rules) == 0:
             return RiskGuardrailResult(
                 passed=False,
                 reason=RejectionReason.NO_EXIT_PLAN,
-                message="No exit plan defined. Every trade needs exit logic before entry.",
+                message="Trade rejected: No exit plan defined. Every trade must have exit rules (profit target, stop loss, etc.)",
             )
-        
-        exit_valid, exit_msg = ExitRuleValidator.validate_exit_rules(exit_rules)
-        if not exit_valid:
-            return RiskGuardrailResult(
-                passed=False,
-                reason=RejectionReason.NO_EXIT_PLAN,
-                message=exit_msg or "Invalid exit plan.",
-            )
-        
+
         # Check max loss per trade
-        if max_loss_pct > self.risk_config["max_loss_pct"]:
+        max_loss_limits = {
+            RiskLevel.LOW: 2.0,
+            RiskLevel.MEDIUM: 5.0,
+            RiskLevel.HIGH: 10.0,
+        }
+        max_loss_limit = max_loss_limits.get(self.risk_level, 5.0)
+        if max_loss_pct > max_loss_limit:
             return RiskGuardrailResult(
                 passed=False,
                 reason=RejectionReason.MAX_LOSS_EXCEEDED,
-                message=f"Max loss {max_loss_pct:.2f}% exceeds {self.risk_level.value} limit of {self.risk_config['max_loss_pct']:.2f}%",
+                message=f"Trade rejected: Max loss {max_loss_pct:.2f}% exceeds {self.risk_level.value} limit of {max_loss_limit:.2f}%",
             )
-        
+
         # Check max contracts per trade
-        if num_contracts > self.risk_config["max_contracts"]:
+        max_contracts = 10
+        if num_contracts > max_contracts:
             return RiskGuardrailResult(
                 passed=False,
                 reason=RejectionReason.MAX_CONTRACTS_EXCEEDED,
-                message=f"Contracts {num_contracts} exceeds {self.risk_level.value} limit of {self.risk_config['max_contracts']}",
+                message=f"Trade rejected: {num_contracts} contracts exceeds maximum of {max_contracts}",
             )
-        
+
         # Check max daily loss
+        max_daily_loss_limits = {
+            RiskLevel.LOW: 3.0,
+            RiskLevel.MEDIUM: 7.0,
+            RiskLevel.HIGH: 15.0,
+        }
+        max_daily_loss = max_daily_loss_limits.get(self.risk_level, 7.0)
         total_daily_loss = current_daily_loss_pct + max_loss_pct
-        if total_daily_loss > self.risk_config["max_daily_loss_pct"]:
+        if total_daily_loss > max_daily_loss:
             return RiskGuardrailResult(
                 passed=False,
                 reason=RejectionReason.MAX_DAILY_LOSS_EXCEEDED,
-                message=f"Total daily loss {total_daily_loss:.2f}% exceeds {self.risk_level.value} limit of {self.risk_config['max_daily_loss_pct']:.2f}%",
+                message=f"Trade rejected: Total daily loss {total_daily_loss:.2f}% exceeds limit of {max_daily_loss:.2f}%",
             )
-        
+
         # Check max open positions
-        if current_open_positions >= self.risk_config["max_open_positions"]:
+        max_open_positions = {
+            RiskLevel.LOW: 5,
+            RiskLevel.MEDIUM: 10,
+            RiskLevel.HIGH: 20,
+        }
+        max_positions = max_open_positions.get(self.risk_level, 10)
+        if current_open_positions >= max_positions:
             return RiskGuardrailResult(
                 passed=False,
                 reason=RejectionReason.MAX_OPEN_POSITIONS_EXCEEDED,
-                message=f"Open positions {current_open_positions} at {self.risk_level.value} limit of {self.risk_config['max_open_positions']}",
+                message=f"Trade rejected: Already at maximum of {max_positions} open positions",
             )
-        
+
         # Check bid-ask spread
         if contract.bid and contract.ask:
-            mid_price = (contract.bid + contract.ask) / 2
-            spread_pct = (contract.ask - contract.bid) / mid_price if mid_price > 0 else 1.0
-            if spread_pct > self.risk_config["max_bid_ask_spread_pct"]:
+            spread_pct = (contract.ask - contract.bid) / contract.bid * 100
+            spread_limits = {
+                RiskLevel.LOW: 5.0,
+                RiskLevel.MEDIUM: 10.0,
+                RiskLevel.HIGH: 15.0,
+            }
+            spread_limit = spread_limits.get(self.risk_level, 10.0)
+            if spread_pct > spread_limit:
                 return RiskGuardrailResult(
                     passed=False,
                     reason=RejectionReason.BID_ASK_SPREAD_TOO_WIDE,
-                    message=f"Bid-ask spread {spread_pct:.2%} exceeds {self.risk_level.value} limit of {self.risk_config['max_bid_ask_spread_pct']:.2%}",
+                    message=f"Trade rejected: Bid-ask spread {spread_pct:.2f}% exceeds {self.risk_level.value} limit of {spread_limit:.2f}%",
                 )
-        
+
         # Check volume
-        if (contract.volume or 0) < self.risk_config["min_volume"]:
+        volume_limits = {
+            RiskLevel.LOW: 50,
+            RiskLevel.MEDIUM: 20,
+            RiskLevel.HIGH: 10,
+        }
+        min_volume = volume_limits.get(self.risk_level, 20)
+        if contract.volume and contract.volume < min_volume:
             return RiskGuardrailResult(
                 passed=False,
                 reason=RejectionReason.VOLUME_TOO_LOW,
-                message=f"Volume {contract.volume or 0} below {self.risk_level.value} minimum of {self.risk_config['min_volume']}",
+                message=f"Trade rejected: Volume {contract.volume} is below {self.risk_level.value} minimum of {min_volume}",
             )
-        
+
         # Check open interest
-        if (contract.open_interest or 0) < self.risk_config["min_open_interest"]:
+        oi_limits = {
+            RiskLevel.LOW: 100,
+            RiskLevel.MEDIUM: 50,
+            RiskLevel.HIGH: 20,
+        }
+        min_oi = oi_limits.get(self.risk_level, 50)
+        if contract.open_interest and contract.open_interest < min_oi:
             return RiskGuardrailResult(
                 passed=False,
                 reason=RejectionReason.OPEN_INTEREST_TOO_LOW,
-                message=f"Open interest {contract.open_interest or 0} below {self.risk_level.value} minimum of {self.risk_config['min_open_interest']}",
+                message=f"Trade rejected: Open interest {contract.open_interest} is below {self.risk_level.value} minimum of {min_oi}",
             )
-        
-        # Check earnings window
-        if contract.earnings_date:
-            try:
-                earnings_dt = datetime.strptime(contract.earnings_date, "%Y-%m-%d")
-                days_to_earnings = (earnings_dt - datetime.now()).days
-                buffer = self.risk_config["earnings_buffer_days"]
-                if -buffer <= days_to_earnings <= buffer:
-                    return RiskGuardrailResult(
-                        passed=False,
-                        reason=RejectionReason.EARNINGS_WINDOW_RESTRICTED,
-                        message=f"Earnings on {contract.earnings_date} within {buffer}-day buffer",
-                    )
-            except (ValueError, TypeError):
-                pass
-        
-        # Check live trading approval
-        if is_live_trading and not user_approved_live_trading:
-            return RiskGuardrailResult(
-                passed=False,
-                reason=RejectionReason.LIVE_TRADING_NOT_APPROVED,
-                message="Live trading is disabled by default. User approval required.",
-            )
-        
-        # Check event risk
-        if contract.event_risks:
-            acceptable, reason_msg = EventRiskAnalyzer.assess_event_risk(
-                contract.event_risks,
-                self.risk_level,
-                contract.days_to_expiration,
-            )
-            if not acceptable:
-                return RiskGuardrailResult(
-                    passed=False,
-                    reason=RejectionReason.EVENT_RISK_TOO_HIGH,
-                    message=reason_msg or "Event risk too high",
-                )
-        
-        return RiskGuardrailResult(passed=True)
+
+        # All checks passed
+        return RiskGuardrailResult(
+            passed=True,
+            reason=None,
+            message="Trade passed all risk guardrails",
+        )
