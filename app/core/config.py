@@ -106,6 +106,13 @@ class Config:
     DEFAULT_RISK_LEVEL: str = os.getenv("DEFAULT_RISK_LEVEL", "medium")
     MAX_DAILY_LOSS_PCT: float = float(os.getenv("MAX_DAILY_LOSS_PCT", "5.0"))
 
+    # Paper Trading Comparison Configuration
+    PAPER_TRADING_COMPARISON_ENABLED: bool = os.getenv("PAPER_TRADING_COMPARISON_ENABLED", "True").lower() == "true"
+    PAPER_TRADING_FILL_RATE_THRESHOLD: float = float(os.getenv("PAPER_TRADING_FILL_RATE_THRESHOLD", "0.95"))
+    PAPER_TRADING_SLIPPAGE_THRESHOLD: float = float(os.getenv("PAPER_TRADING_SLIPPAGE_THRESHOLD", "0.01"))
+    PAPER_TRADING_PNL_VARIANCE_THRESHOLD: float = float(os.getenv("PAPER_TRADING_PNL_VARIANCE_THRESHOLD", "0.10"))
+    PAPER_TRADING_DISABLE_ON_POOR_PERFORMANCE: bool = os.getenv("PAPER_TRADING_DISABLE_ON_POOR_PERFORMANCE", "True").lower() == "true"
+
     # Signal Scoring Thresholds
     # Minimum score threshold for recommending a trade (0-100 scale)
     MIN_SIGNAL_SCORE: float = float(os.getenv("MIN_SIGNAL_SCORE", "50.0"))
@@ -222,42 +229,15 @@ class Config:
 
     @classmethod
     def is_dev(cls) -> bool:
-        """Check if running in development mode."""
+        """Check if running in dev environment."""
         return cls.ENVIRONMENT == Environment.DEV
 
     @classmethod
     def is_test(cls) -> bool:
-        """Check if running in test mode."""
+        """Check if running in test environment."""
         return cls.ENVIRONMENT == Environment.TEST
 
     @classmethod
     def is_prod(cls) -> bool:
-        """Check if running in production mode."""
+        """Check if running in prod environment."""
         return cls.ENVIRONMENT == Environment.PROD
-
-    @classmethod
-    def is_live_trading_enabled(cls) -> bool:
-        """Check if live trading is enabled.
-        
-        Returns:
-            True only if both LIVE_TRADING_ENABLED is True and PAPER_TRADING_ENABLED is False
-        """
-        return cls.LIVE_TRADING_ENABLED and not cls.PAPER_TRADING_ENABLED
-
-    @classmethod
-    def get_min_liquidity_score(cls, risk_level: str) -> float:
-        """Get minimum liquidity score threshold for a risk level.
-        
-        Args:
-            risk_level: Risk level ("low", "medium", "high")
-            
-        Returns:
-            Minimum liquidity score threshold (0-100)
-        """
-        risk_level = risk_level.lower().strip()
-        if risk_level == "low":
-            return cls.MIN_LIQUIDITY_SCORE_LOW
-        elif risk_level == "high":
-            return cls.MIN_LIQUIDITY_SCORE_HIGH
-        else:  # medium or default
-            return cls.MIN_LIQUIDITY_SCORE_MEDIUM
