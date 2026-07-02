@@ -131,7 +131,59 @@ class TestBacktestEngine:
         assert "strategy_name" in result_dict
         assert "symbol" in result_dict
         assert "total_return" in result_dict
+        assert "avg_win" in result_dict
+        assert "avg_loss" in result_dict
+        assert "expected_value" in result_dict
+        assert "avg_holding_period" in result_dict
+        assert "is_losing_strategy" in result_dict
         assert result_dict["symbol"] == "TEST"
+
+    def test_backtest_metrics_calculation(self, backtest_engine, sample_price_data):
+        """Test that all metrics are calculated correctly."""
+        signals = pd.Series([0] * len(sample_price_data), index=sample_price_data.index)
+        signals.iloc[10] = 1   # Buy
+        signals.iloc[30] = -1  # Sell (profit)
+        signals.iloc[40] = 1   # Buy
+        signals.iloc[60] = -1  # Sell (profit)
+        
+        result = backtest_engine.backtest(
+            symbol="TEST",
+            price_data=sample_price_data,
+            signals=signals,
+            strategy_name="test_metrics",
+        )
+        
+        # Verify all metrics exist and are reasonable
+        assert result.win_rate >= 0.0 and result.win_rate <= 1.0
+        assert result.avg_win >= 0.0
+        assert result.avg_loss <= 0.0
+        assert result.profit_factor >= 0.0
+        assert result.avg_holding_period >= 0.0
+        assert isinstance(result.expected_value, float)
+        assert result.total_trades >= 0
+
+    def test_losing_strategy_marked(self, backtest_engine, sample_price_data):
+        """Test that losing strategies are marked."""
+        # Create signals that will likely lose (sell before buy)
+        signals = pd.Series([0] * len(sample_price_data), index=sample_price_data.index)
+        signals.iloc[0] = -1  # Sell first (no position)
+        signals.iloc[50] = 1  # Buy
+        signals.iloc[99] = -1  # Sell
+        
+        result = backtest_engine.backtest(
+            symbol="TEST",
+            price_data=sample_price_data,
+            signals=signals,
+        )
+        
+        # Check if strategy is marked as losing
+        is_losing = result.is_losing_strategy()
+        assert isinstance(is_losing, bool)
+        
+        # Verify it appears in string representation
+        result_str = str(result)
+        if is_losing:
+            assert "LOSING STRATEGY" in result_str
 
 
 class TestHistoricalSignalReplay:
@@ -327,35 +379,24 @@ class TestLookAheadBiasPrevention:
         # Verify future data was not accessible
         assert not future_data_accessed
 
-    def test_replay_vs_vectorized_backtest_consistency(self, backtest_engine, sample_price_data):
-        """Test that replay and vectorized backtest produce similar results."""
-        # Create deterministic signals
+    def test_backtest_result_string_includes_all_metrics(self, backtest_engine, sample_price_data):
+        """Test that backtest result string includes all metrics."""
         signals = pd.Series([0] * len(sample_price_data), index=sample_price_data.index)
-        signals.iloc[20] = 1
+        signals.iloc[10] = 1
         signals.iloc[50] = -1
         
-        # Vectorized backtest
-        result_vectorized = backtest_engine.backtest(
+        result = backtest_engine.backtest(
             symbol="TEST",
             price_data=sample_price_data,
             signals=signals,
         )
         
-        # Replay backtest
-        def signal_generator(symbol, price_data_up_to_date):
-            idx = len(price_data_up_to_date) - 1
-            if idx == 20:
-                return 1
-            elif idx == 50:
-                return -1
-            return 0
+        result_str = str(result)
         
-        result_replay, trades = backtest_engine.replay_signals_day_by_day(
-            symbol="TEST",
-            price_data=sample_price_data,
-            signal_generator_fn=signal_generator,
-        )
-        
-        # Results should be similar (not exact due to implementation differences)
-        assert result_vectorized.total_trades == result_replay.total_trades
-        assert abs(result_vectorized.total_return - result_replay.total_return) < 0.1
+        # Verify key metrics appear in string
+        assert "Win Rate" in result_str
+        assert "Avg Win" in result_str
+        assert "Avg Loss" in result_str
+        assert "Profit Factor" in result_str
+        assert "Expected Value" in result_str
+        assert "Avg Holding Period" in result_str

@@ -37,6 +37,10 @@ class BacktestResult:
         best_trade: Best single trade profit
         worst_trade: Worst single trade loss
         profit_factor: Gross profit / gross loss
+        avg_win: Average profit on winning trades
+        avg_loss: Average loss on losing trades
+        expected_value: Expected value per trade (avg_win * win_rate + avg_loss * (1 - win_rate))
+        avg_holding_period: Average number of days holding per trade
         trades: DataFrame with individual trade details
         equity_curve: Series with daily portfolio values
         metadata: Additional metadata from backtest
@@ -57,9 +61,21 @@ class BacktestResult:
     best_trade: float
     worst_trade: float
     profit_factor: float
+    avg_win: float
+    avg_loss: float
+    expected_value: float
+    avg_holding_period: float
     trades: Optional[pd.DataFrame] = None
     equity_curve: Optional[pd.Series] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def is_losing_strategy(self) -> bool:
+        """Check if strategy is losing (negative total return).
+        
+        Returns:
+            True if total_return is negative, False otherwise
+        """
+        return self.total_return < 0.0
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert result to dictionary."""
@@ -80,18 +96,26 @@ class BacktestResult:
             "best_trade": self.best_trade,
             "worst_trade": self.worst_trade,
             "profit_factor": self.profit_factor,
+            "avg_win": self.avg_win,
+            "avg_loss": self.avg_loss,
+            "expected_value": self.expected_value,
+            "avg_holding_period": self.avg_holding_period,
+            "is_losing_strategy": self.is_losing_strategy(),
         }
 
     def __str__(self) -> str:
         """String representation of backtest result."""
+        losing_marker = " [LOSING STRATEGY]" if self.is_losing_strategy() else ""
         return (
-            f"BacktestResult({self.strategy_name} on {self.symbol})\n"
+            f"BacktestResult({self.strategy_name} on {self.symbol}){losing_marker}\n"
             f"  Period: {self.start_date.date()} to {self.end_date.date()}\n"
             f"  Initial: ${self.initial_cash:,.2f} -> Final: ${self.final_value:,.2f}\n"
             f"  Return: {self.total_return:.2%} (annualized: {self.annual_return:.2%})\n"
             f"  Sharpe: {self.sharpe_ratio:.2f} | Max DD: {self.max_drawdown:.2%}\n"
             f"  Trades: {self.total_trades} | Win Rate: {self.win_rate:.2%}\n"
-            f"  Avg Trade: ${self.avg_trade_profit:,.2f} | Profit Factor: {self.profit_factor:.2f}"
+            f"  Avg Trade: ${self.avg_trade_profit:,.2f} | Avg Win: ${self.avg_win:,.2f} | Avg Loss: ${self.avg_loss:,.2f}\n"
+            f"  Profit Factor: {self.profit_factor:.2f} | Expected Value: ${self.expected_value:,.2f}\n"
+            f"  Avg Holding Period: {self.avg_holding_period:.1f} days"
         )
 
 
@@ -234,21 +258,49 @@ class BacktestEngine:
         
         if total_trades > 0:
             trade_pnl = trades["pnl"]
+            trade_returns = trades["return"]
+            
+            # Win rate and trade statistics
             winning_trades = np.sum(trade_pnl > 0)
+            losing_trades = np.sum(trade_pnl < 0)
             win_rate = winning_trades / total_trades if total_trades > 0 else 0.0
+            
+            # Average win and loss
+            winning_pnl = trade_pnl[trade_pnl > 0]
+            losing_pnl = trade_pnl[trade_pnl < 0]
+            avg_win = np.mean(winning_pnl) if len(winning_pnl) > 0 else 0.0
+            avg_loss = np.mean(losing_pnl) if len(losing_pnl) > 0 else 0.0
+            
+            # Average trade profit
             avg_trade_profit = np.mean(trade_pnl) if len(trade_pnl) > 0 else 0.0
+            
+            # Best and worst trades
             best_trade = np.max(trade_pnl) if len(trade_pnl) > 0 else 0.0
             worst_trade = np.min(trade_pnl) if len(trade_pnl) > 0 else 0.0
             
+            # Profit factor
             gross_profit = np.sum(trade_pnl[trade_pnl > 0])
             gross_loss = np.abs(np.sum(trade_pnl[trade_pnl < 0]))
             profit_factor = gross_profit / gross_loss if gross_loss > 0 else 0.0
+            
+            # Expected value per trade
+            expected_value = (avg_win * win_rate) + (avg_loss * (1 - win_rate))
+            
+            # Average holding period (in days)
+            entry_dates = trades["entry_idx"]
+            exit_dates = trades["exit_idx"]
+            holding_periods = exit_dates - entry_dates
+            avg_holding_period = np.mean(holding_periods) if len(holding_periods) > 0 else 0.0
         else:
             win_rate = 0.0
+            avg_win = 0.0
+            avg_loss = 0.0
             avg_trade_profit = 0.0
             best_trade = 0.0
             worst_trade = 0.0
             profit_factor = 0.0
+            expected_value = 0.0
+            avg_holding_period = 0.0
 
         # Get equity curve
         equity_curve = pd.Series(
@@ -274,6 +326,10 @@ class BacktestEngine:
             best_trade=float(best_trade),
             worst_trade=float(worst_trade),
             profit_factor=float(profit_factor),
+            avg_win=float(avg_win),
+            avg_loss=float(avg_loss),
+            expected_value=float(expected_value),
+            avg_holding_period=float(avg_holding_period),
             equity_curve=equity_curve,
         )
 
@@ -319,44 +375,47 @@ class BacktestEngine:
         for i in range(len(price_data)):
             # Get data up to current day (no look-ahead)
             current_date = price_data.index[i]
-            price_data_up_to_date = price_data.iloc[:i+1]
+            price_data_up_to = price_data.iloc[:i+1]
             
             # Generate signal using only available data
-            try:
-                signal = signal_generator_fn(symbol, price_data_up_to_date)
-            except Exception as e:
-                logger.warning(f"Error generating signal on {current_date}: {e}")
-                signal = 0
-            
+            signal = signal_generator_fn(symbol, price_data_up_to)
             signals.append(signal)
+            
             current_price = price_data["close"].iloc[i]
             
-            # Process signal
+            # Handle entry signal
             if signal == 1 and current_position is None:
-                # Entry signal
                 current_position = {
                     "entry_date": current_date,
                     "entry_price": current_price,
-                    "quantity": 1,
-                    "reason": "Signal generated",
-                    "signal_score": 0.0,  # Would be populated from actual signal
+                    "quantity": int(portfolio_value / current_price),
                 }
+            
+            # Handle exit signal
             elif signal == -1 and current_position is not None:
-                # Exit signal
+                exit_date = current_date
                 exit_price = current_price
-                pnl = (exit_price - current_position["entry_price"]) * current_position["quantity"]
-                pnl_pct = (exit_price - current_position["entry_price"]) / current_position["entry_price"]
+                entry_price = current_position["entry_price"]
+                quantity = current_position["quantity"]
                 
+                # Calculate P&L
+                pnl = (exit_price - entry_price) * quantity
+                pnl_pct = (exit_price - entry_price) / entry_price if entry_price > 0 else 0.0
+                
+                # Calculate holding period
+                holding_days = (exit_date - current_position["entry_date"]).days
+                
+                # Create trade record
                 trade = SimulatedTrade(
                     entry_date=current_position["entry_date"],
-                    entry_price=current_position["entry_price"],
-                    exit_date=current_date,
+                    entry_price=entry_price,
+                    exit_date=exit_date,
                     exit_price=exit_price,
-                    quantity=current_position["quantity"],
+                    quantity=quantity,
                     pnl=pnl,
                     pnl_pct=pnl_pct,
-                    reason=current_position["reason"],
-                    signal_score=current_position["signal_score"],
+                    reason="signal",
+                    signal_score=0.0,
                 )
                 simulated_trades.append(trade)
                 
@@ -364,32 +423,41 @@ class BacktestEngine:
                 portfolio_value += pnl
                 current_position = None
             
-            # Track equity
-            if current_position is not None:
-                # Unrealized P&L
-                unrealized_pnl = (current_price - current_position["entry_price"]) * current_position["quantity"]
-                equity_values.append(portfolio_value + unrealized_pnl)
-            else:
-                equity_values.append(portfolio_value)
+            equity_values.append(portfolio_value)
+        
+        # Close any open position at end
+        if current_position is not None:
+            exit_date = price_data.index[-1]
+            exit_price = price_data["close"].iloc[-1]
+            entry_price = current_position["entry_price"]
+            quantity = current_position["quantity"]
+            
+            pnl = (exit_price - entry_price) * quantity
+            pnl_pct = (exit_price - entry_price) / entry_price if entry_price > 0 else 0.0
+            
+            trade = SimulatedTrade(
+                entry_date=current_position["entry_date"],
+                entry_price=entry_price,
+                exit_date=exit_date,
+                exit_price=exit_price,
+                quantity=quantity,
+                pnl=pnl,
+                pnl_pct=pnl_pct,
+                reason="end_of_period",
+                signal_score=0.0,
+            )
+            simulated_trades.append(trade)
+            portfolio_value += pnl
         
         # Convert signals to DataFrame
-        signals_df = pd.DataFrame(
-            signals,
-            index=price_data.index,
-            columns=["signal"],
-        )["signal"]
+        signals_df = pd.Series(signals, index=price_data.index)
         
-        # Run standard backtest for metrics
+        # Run backtest with generated signals
         result = self.backtest(
             symbol=symbol,
             price_data=price_data,
             signals=signals_df,
             strategy_name=strategy_name,
-        )
-        
-        logger.info(
-            f"Historical signal replay completed: {len(simulated_trades)} trades, "
-            f"final portfolio value: ${portfolio_value:,.2f}"
         )
         
         return result, simulated_trades
