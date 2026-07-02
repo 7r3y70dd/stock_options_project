@@ -4,12 +4,12 @@ Each strategy plugs into the same engine and generates Signal candidates.
 """
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 
 from app.data_sources import DataProvider
-from services.options_service import OptionContract, ScoredOption
+from services.options_service import OptionContract, ScoredOption, ExitRule
 from services import RiskLevel
 
 
@@ -42,6 +42,14 @@ class StrategySignal:
     - 80-100: Excellent signal, high confidence
     
     Scores are adjusted based on user risk level to prioritize different factors.
+    
+    Every signal must include exit rules before entry. Exit rules define:
+    - Profit targets
+    - Stop losses
+    - Time-based exits
+    - Earnings exits
+    - Expiration exits
+    - Trailing stops
     """
     symbol: str
     strategy_type: str  # Name of the strategy that generated this
@@ -51,6 +59,7 @@ class StrategySignal:
     max_loss: float  # In dollars (required)
     probability_estimate: float  # 0.0 to 1.0
     reason: str  # Explanation (required)
+    exit_rules: List[ExitRule] = field(default_factory=list)  # Exit plan (required)
     option_contracts: Optional[List[ScoredOption]] = None  # Associated options
     breakdown: Optional[Dict[str, float]] = None  # Factor scores for transparency
 
@@ -61,6 +70,8 @@ class Strategy(ABC):
     Each strategy implements the generate() method to analyze market conditions
     and produce Signal candidates. Strategies are pluggable and can be
     enabled/disabled via configuration.
+    
+    Every signal must include exit rules before entry.
     """
 
     def __init__(self, name: str, enabled: bool = True):
@@ -98,6 +109,7 @@ class Strategy(ABC):
             - max_loss: Maximum loss estimate in dollars
             - score: Confidence score 0.0-100.0 (adjusted for risk level)
             - expected_profit: Expected profit in dollars
+            - exit_rules: List of exit rules (profit target, stop loss, etc.)
             - breakdown: Dict with component scores for explainability
         """
         pass
