@@ -1,20 +1,16 @@
-"""Database connection and session management."""
+"""Database configuration and session management."""
 
-import logging
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker, declarative_base
+from sqlalchemy.pool import StaticPool
 from typing import Generator
 
-from sqlalchemy import create_engine, event
-from sqlalchemy.orm import declarative_base, sessionmaker, Session
-from sqlalchemy.pool import StaticPool
+from app.core.config import get_config
 
-from app.core.config import config
+# Get config instance
+config = get_config()
 
-logger = logging.getLogger(__name__)
-
-# SQLAlchemy declarative base for all models
-Base = declarative_base()
-
-# Create engine
+# Create engine based on environment
 if config.is_test():
     # Use in-memory SQLite for tests
     engine = create_engine(
@@ -23,22 +19,25 @@ if config.is_test():
         poolclass=StaticPool,
     )
 else:
-    # Use PostgreSQL for dev/prod
+    # Use configured database URL
+    database_url = config.get_database_url()
     engine = create_engine(
-        config.DATABASE_URL,
-        echo=config.DEBUG,
-        pool_pre_ping=True,
+        database_url,
+        echo=config.is_development(),
     )
 
-# Session factory
+# Create session factory
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
+# Create declarative base for models
+Base = declarative_base()
 
-def get_db() -> Generator[Session, None, None]:
-    """Get database session for dependency injection.
+
+def get_db() -> Generator:
+    """Get database session.
     
     Yields:
-        SQLAlchemy Session
+        Database session.
     """
     db = SessionLocal()
     try:
@@ -49,20 +48,10 @@ def get_db() -> Generator[Session, None, None]:
 
 def init_db() -> None:
     """Initialize database by creating all tables."""
-    logger.info("Initializing database...")
     Base.metadata.create_all(bind=engine)
-    logger.info("Database initialized successfully")
 
 
 def reset_db() -> None:
-    """Reset database by dropping and recreating all tables.
-    
-    WARNING: This will delete all data. Use only in test/dev environments.
-    """
-    if config.is_prod():
-        raise RuntimeError("Cannot reset database in production environment")
-    
-    logger.warning("Resetting database - all data will be deleted")
+    """Reset database by dropping and recreating all tables."""
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
-    logger.info("Database reset complete")
