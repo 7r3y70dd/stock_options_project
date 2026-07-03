@@ -1,58 +1,92 @@
-"""Application configuration management.
+"""Application configuration management."""
 
-Handles environment-based configuration for different deployment scenarios.
-"""
-
-import os
+from enum import Enum
 from typing import Optional
 from functools import lru_cache
+import os
+
+
+class Environment(str, Enum):
+    """Environment types."""
+    TEST = "test"
+    DEVELOPMENT = "development"
+    PRODUCTION = "production"
 
 
 class Config:
-    """Base configuration class."""
+    """Application configuration."""
 
-    # Environment
-    ENV: str = os.getenv("ENV", "development")
-    DEBUG: bool = os.getenv("DEBUG", "False").lower() == "true"
-    TESTING: bool = os.getenv("TESTING", "False").lower() == "true"
-
-    # Database
-    DATABASE_URL: str = os.getenv(
-        "DATABASE_URL",
-        "sqlite:///./test.db" if os.getenv("TESTING") else "sqlite:///./app.db",
-    )
-
-    # API Keys
-    ALPHAVANTAGE_API_KEY: Optional[str] = os.getenv("ALPHAVANTAGE_API_KEY")
-    FINNHUB_API_KEY: Optional[str] = os.getenv("FINNHUB_API_KEY")
-
-    # Celery
-    CELERY_BROKER_URL: str = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
-    CELERY_RESULT_BACKEND: str = os.getenv(
-        "CELERY_RESULT_BACKEND", "redis://localhost:6379/0"
-    )
-
-    # Application
-    APP_NAME: str = "Stock Options Trading"
-    APP_VERSION: str = "0.1.0"
+    def __init__(self, environment: Optional[str] = None):
+        """Initialize configuration.
+        
+        Args:
+            environment: Environment type (test, development, production).
+                        If None, reads from ENVIRONMENT env var, defaults to development.
+        """
+        if environment is None:
+            environment = os.getenv("ENVIRONMENT", "development")
+        
+        try:
+            self.environment = Environment(environment.lower())
+        except (ValueError, AttributeError):
+            self.environment = Environment.DEVELOPMENT
 
     def is_test(self) -> bool:
-        """Check if the application is running in test mode.
-
+        """Check if running in test environment.
+        
         Returns:
-            bool: True if TESTING environment variable is set to true, False otherwise.
+            True if environment is test, False otherwise.
         """
-        return self.TESTING or os.getenv("TESTING", "").lower() == "true"
+        return self.environment == Environment.TEST
+
+    def is_development(self) -> bool:
+        """Check if running in development environment.
+        
+        Returns:
+            True if environment is development, False otherwise.
+        """
+        return self.environment == Environment.DEVELOPMENT
+
+    def is_production(self) -> bool:
+        """Check if running in production environment.
+        
+        Returns:
+            True if environment is production, False otherwise.
+        """
+        return self.environment == Environment.PRODUCTION
+
+    def get_database_url(self) -> str:
+        """Get database URL based on environment.
+        
+        Returns:
+            Database connection URL.
+        """
+        if self.is_test():
+            return os.getenv("TEST_DATABASE_URL", "sqlite:///:memory:")
+        elif self.is_production():
+            return os.getenv("DATABASE_URL", "postgresql://localhost/stock_options_prod")
+        else:
+            return os.getenv("DATABASE_URL", "sqlite:///./stock_options.db")
+
+    def get_log_level(self) -> str:
+        """Get log level based on environment.
+        
+        Returns:
+            Log level string.
+        """
+        if self.is_production():
+            return "INFO"
+        elif self.is_test():
+            return "DEBUG"
+        else:
+            return "DEBUG"
 
 
-@lru_cache()
+@lru_cache(maxsize=1)
 def get_config() -> Config:
-    """Get the application configuration.
-
+    """Get or create the global config instance.
+    
     Returns:
-        Config: The application configuration instance.
+        Config instance.
     """
     return Config()
-
-
-config = get_config()
