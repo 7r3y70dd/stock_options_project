@@ -1,55 +1,43 @@
-"""Application configuration management."""
+"""Application configuration."""
 
-from enum import Enum
+import os
 from typing import Optional
-from pydantic import BaseSettings
 
 
-class Environment(str, Enum):
-    """Environment types."""
-    DEVELOPMENT = "development"
-    TESTING = "testing"
-    PRODUCTION = "production"
+class Config:
+    """Application configuration class."""
 
-
-class Config(BaseSettings):
-    """Application configuration."""
-    
-    # Environment
-    environment: Environment = Environment.DEVELOPMENT
-    
     # Database
-    database_url: str = "sqlite:///./test.db"
-    
-    # API
-    api_title: str = "Stock Options API"
-    api_version: str = "1.0.0"
-    
-    # Security
-    secret_key: str = "your-secret-key-change-in-production"
-    algorithm: str = "HS256"
-    access_token_expire_minutes: int = 30
-    
-    # External APIs
-    alpha_vantage_api_key: Optional[str] = None
-    finnhub_api_key: Optional[str] = None
-    
+    DATABASE_URL: str = os.getenv(
+        "DATABASE_URL",
+        "sqlite:///./test.db"
+    )
+
+    # API Keys
+    ALPHA_VANTAGE_API_KEY: Optional[str] = os.getenv("ALPHA_VANTAGE_API_KEY")
+    FINNHUB_API_KEY: Optional[str] = os.getenv("FINNHUB_API_KEY")
+
+    # Environment
+    ENVIRONMENT: str = os.getenv("ENVIRONMENT", "development")
+
     # Celery
-    celery_broker_url: str = "redis://localhost:6379/0"
-    celery_result_backend: str = "redis://localhost:6379/0"
-    
-    class Config:
-        env_file = ".env"
-        case_sensitive = False
-    
-    def is_test(self) -> bool:
-        """Check if running in test environment."""
-        return self.environment == Environment.TESTING
-    
-    def is_production(self) -> bool:
-        """Check if running in production environment."""
-        return self.environment == Environment.PRODUCTION
-    
-    def is_development(self) -> bool:
-        """Check if running in development environment."""
-        return self.environment == Environment.DEVELOPMENT
+    CELERY_BROKER_URL: str = os.getenv(
+        "CELERY_BROKER_URL",
+        "redis://localhost:6379/0"
+    )
+    CELERY_RESULT_BACKEND: str = os.getenv(
+        "CELERY_RESULT_BACKEND",
+        "redis://localhost:6379/0"
+    )
+
+    # Testing
+    TESTING: bool = os.getenv("TESTING", "false").lower() == "true"
+
+    @classmethod
+    def is_test(cls) -> bool:
+        """Check if running in test mode.
+        
+        Returns:
+            bool: True if TESTING environment variable is set to true.
+        """
+        return cls.TESTING
