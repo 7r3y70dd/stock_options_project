@@ -207,10 +207,10 @@ class FinnhubProvider(DataProvider):
                     NewsArticle(
                         symbol=symbol.upper(),
                         title=item.get('headline', ''),
-                        summary=item.get('summary', ''),
+                        description=item.get('summary', ''),
                         url=item.get('url', ''),
                         source=item.get('source', ''),
-                        published_at=datetime.fromtimestamp(item.get('datetime', 0)).isoformat(),
+                        published_at=datetime.fromtimestamp(item.get('datetime', 0)),
                     )
                 )
             

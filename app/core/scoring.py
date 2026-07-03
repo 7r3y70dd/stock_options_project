@@ -394,20 +394,36 @@ class SignalScorer:
     @classmethod
     def _get_weights_for_risk_level(cls, risk_level: Optional[str]) -> Dict[str, float]:
         """Get scoring weights for a specific risk level.
-        
-        Args:
-            risk_level: Risk level ("low", "medium", "high") or None for default
-            
-        Returns:
-            Dictionary of scoring weights
+
+        LOW prioritizes liquidity and probability.
+        MEDIUM uses the balanced default weights.
+        HIGH prioritizes reward/risk and volatility tolerance.
         """
-        # Try to import config for risk-specific weights
-        try:
-            from app.core.config import config
-            if risk_level:
-                return config.get_scoring_weights(risk_level)
-        except (ImportError, AttributeError):
-            pass
-        
-        # Fall back to default weights
-        return cls.WEIGHTS_DEFAULT
+        if risk_level is None:
+            return cls.WEIGHTS_DEFAULT.copy()
+
+        normalized = str(risk_level).lower()
+
+        weights_by_level = {
+            "low": {
+                "liquidity": 0.35,
+                "reward_risk": 0.10,
+                "probability": 0.20,
+                "volatility": 0.10,
+                "sentiment": 0.10,
+                "trend": 0.10,
+                "event_risk": 0.05,
+            },
+            "medium": cls.WEIGHTS_DEFAULT.copy(),
+            "high": {
+                "liquidity": 0.10,
+                "reward_risk": 0.35,
+                "probability": 0.15,
+                "volatility": 0.15,
+                "sentiment": 0.10,
+                "trend": 0.10,
+                "event_risk": 0.05,
+            },
+        }
+
+        return weights_by_level.get(normalized, cls.WEIGHTS_DEFAULT.copy())

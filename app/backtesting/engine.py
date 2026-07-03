@@ -89,7 +89,7 @@ class BacktestResult:
 
     def is_losing_strategy(self) -> bool:
         """Check if strategy is losing."""
-        return self.final_value < self.initial_cash
+        return bool(self.final_value < self.initial_cash)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
