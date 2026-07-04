@@ -1,12 +1,23 @@
-"""Frontend module for stock options dashboard."""
-from app.frontend.api_client import APIClient, APIError
-from app.frontend.shared_states import EmptyState, ErrorState, LoadingState, UIState
+"""Frontend assets and templates."""
+
+from app.frontend.dashboard import (
+    Dashboard,
+    DashboardData,
+    PortfolioSummary,
+    WatchlistItem,
+    OpportunityItem,
+    TradeItem,
+    NewsItem,
+    RiskSettings,
+)
 
 __all__ = [
-    "APIClient",
-    "APIError",
-    "LoadingState",
-    "ErrorState",
-    "EmptyState",
-    "UIState",
+    "Dashboard",
+    "DashboardData",
+    "PortfolioSummary",
+    "WatchlistItem",
+    "OpportunityItem",
+    "TradeItem",
+    "NewsItem",
+    "RiskSettings",
 ]
