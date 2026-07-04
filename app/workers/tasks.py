@@ -1,6 +1,7 @@
 """Background job tasks for data fetching, signal generation, and trade monitoring."""
 
 import logging
+import json
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict
 
@@ -527,3 +528,253 @@ def monitor_broker_positions(self) -> dict:
     except Exception as exc:
         logger.error(f"Broker position monitoring failed: {exc}", exc_info=True)
         raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
+
+
+
+@celery_app.task(
+    name="app.workers.tasks.generate_signals",
+    bind=True,
+    max_retries=3,
+    default_retry_delay=60,
+)
+def generate_signals(self, user_id: Optional[int] = None, limit: int = 20) -> dict:
+    """Generate ranked paper-trade ideas from watchlist market data.
+
+    This is an MVP scanner. It does not predict the future or execute trades.
+    It creates pending Signal rows for the dashboard to review.
+    """
+    try:
+        logger.info(f"Starting signal generation for user_id={user_id}")
+
+        from app.models.database import User, Watchlist
+
+        db = SessionLocal()
+        provider = get_data_provider()
+
+        try:
+            rows = (
+                db.query(WatchlistSymbol, Watchlist, User)
+                .join(Watchlist, Watchlist.id == WatchlistSymbol.watchlist_id)
+                .join(User, User.id == Watchlist.user_id)
+            )
+
+            if user_id is not None:
+                rows = rows.filter(User.id == user_id)
+
+            rows = rows.all()
+
+            if not rows:
+                return {
+                    "status": "success",
+                    "message": "No watchlist symbols found",
+                    "provider": provider.__class__.__name__,
+                    "symbols_processed": 0,
+                    "signals_created": 0,
+                    "skipped": [],
+                }
+
+            symbol_users = {}
+            for watchlist_symbol, watchlist, user in rows:
+                symbol_users.setdefault(watchlist_symbol.symbol.upper(), []).append(user)
+
+            symbols = sorted(symbol_users.keys())[:limit]
+
+            existing_pending = {
+                (signal.user_id, signal.symbol, signal.strategy_type)
+                for signal in db.query(Signal).filter(Signal.status == "pending").all()
+            }
+
+            risk_pct_by_level = {
+                "low": 0.01,
+                "medium": 0.02,
+                "high": 0.05,
+            }
+
+            signals_created = 0
+            skipped = []
+
+            for symbol in symbols:
+                try:
+                    quote = provider.get_quote(symbol)
+
+                    end_date = datetime.utcnow().strftime("%Y-%m-%d")
+                    start_date = (datetime.utcnow() - timedelta(days=90)).strftime("%Y-%m-%d")
+                    bars = provider.get_price_history(symbol, start_date, end_date)
+
+                    closes = [
+                        float(bar.close)
+                        for bar in bars
+                        if getattr(bar, "close", None) is not None
+                    ]
+
+                    if len(closes) < 20:
+                        skipped.append({
+                            "symbol": symbol,
+                            "reason": "not enough price history",
+                        })
+                        continue
+
+                    quote_price = (
+                        getattr(quote, "price", None)
+                        or getattr(quote, "current_price", None)
+                        or getattr(quote, "last", None)
+                    )
+                    current_price = float(quote_price or closes[-1])
+
+                    avg_20 = sum(closes[-20:]) / 20
+                    avg_60_window = closes[-60:] if len(closes) >= 60 else closes
+                    avg_60 = sum(avg_60_window) / len(avg_60_window)
+
+                    returns = []
+                    for previous, current in zip(closes[:-1], closes[1:]):
+                        if previous:
+                            returns.append((current - previous) / previous)
+
+                    if returns:
+                        mean_return = sum(returns) / len(returns)
+                        variance = sum((r - mean_return) ** 2 for r in returns) / len(returns)
+                        daily_volatility = variance ** 0.5
+                    else:
+                        daily_volatility = 0.0
+
+                    trend_score = 0.0
+                    if current_price > avg_20:
+                        trend_score += 15.0
+                    if avg_20 > avg_60:
+                        trend_score += 15.0
+
+                    volatility_score = max(0.0, 25.0 - min(daily_volatility * 1000.0, 25.0))
+                    score = min(95.0, max(0.0, 50.0 + trend_score + volatility_score))
+
+                    if score >= 75.0:
+                        strategy_type = "credit_spread"
+                        probability_estimate = 0.62
+                        reward_multiple = 0.60
+                    elif score >= 65.0:
+                        strategy_type = "cash_secured_put"
+                        probability_estimate = 0.68
+                        reward_multiple = 0.45
+                    else:
+                        skipped.append({
+                            "symbol": symbol,
+                            "reason": f"score too low: {score:.1f}",
+                        })
+                        continue
+
+                    for user in symbol_users[symbol]:
+                        risk_level = user.risk_level or "medium"
+                        risk_pct = risk_pct_by_level.get(risk_level, 0.02)
+
+                        account_size = float(user.initial_portfolio_value or 2000.0)
+                        max_loss = round(account_size * risk_pct, 2)
+                        expected_profit = round(max_loss * reward_multiple, 2)
+
+                        if max_loss <= 0:
+                            skipped.append({
+                                "symbol": symbol,
+                                "reason": f"user {user.id} has no risk budget",
+                            })
+                            continue
+
+                        key = (user.id, symbol, strategy_type)
+                        if key in existing_pending:
+                            continue
+
+                        signal = Signal(
+                            user_id=user.id,
+                            symbol=symbol,
+                            strategy_type=strategy_type,
+                            risk_level=risk_level,
+                            score=round(score, 2),
+                            expected_profit=expected_profit,
+                            max_loss=max_loss,
+                            probability_estimate=probability_estimate,
+                            reason=(
+                                f"Generated signal: {symbol} is trading near ${current_price:.2f}. "
+                                f"20-day average is ${avg_20:.2f}; 60-day average is ${avg_60:.2f}. "
+                                f"Scanner score is {score:.1f}. Candidate strategy: {strategy_type}. "
+                                f"Max loss is capped near the user's {risk_level} risk budget."
+                            ),
+                            status="pending",
+                            option_contract_id=None,
+                            breakdown=json.dumps({
+                                "current_price": current_price,
+                                "avg_20": avg_20,
+                                "avg_60": avg_60,
+                                "trend_score": trend_score,
+                                "daily_volatility_estimate": daily_volatility,
+                                "volatility_score": volatility_score,
+                                "final": round(score, 2),
+                                "provider": provider.__class__.__name__,
+                            }),
+                            event_risks=json.dumps({
+                                "earnings_risk": "unknown",
+                                "news_risk": "unknown",
+                            }),
+                            exit_rules=json.dumps([
+                                {
+                                    "type": "stop_loss",
+                                    "value": max_loss,
+                                    "description": f"Exit if loss approaches ${max_loss:.2f}",
+                                },
+                                {
+                                    "type": "profit_target",
+                                    "value": expected_profit,
+                                    "description": f"Take profit near ${expected_profit:.2f}",
+                                },
+                            ]),
+                        )
+
+                        db.add(signal)
+                        existing_pending.add(key)
+                        signals_created += 1
+
+                except Exception as e:
+                    logger.warning(f"Error generating signal for {symbol}: {e}", exc_info=True)
+                    skipped.append({
+                        "symbol": symbol,
+                        "reason": repr(e),
+                    })
+
+            db.commit()
+
+            result = {
+                "status": "success",
+                "timestamp": datetime.utcnow().isoformat(),
+                "provider": provider.__class__.__name__,
+                "symbols_processed": len(symbols),
+                "signals_created": signals_created,
+                "skipped": skipped[:20],
+            }
+
+            logger.info(f"Signal generation completed: {result}")
+            return result
+
+        finally:
+            db.close()
+
+    except Exception as exc:
+        logger.error(f"Signal generation failed: {exc}", exc_info=True)
+        raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
+
+
+@celery_app.task(
+    name="app.workers.tasks.fetch_news_for_watchlist",
+    bind=True,
+    max_retries=3,
+    default_retry_delay=60,
+)
+def fetch_news_for_watchlist(self, watchlist_id: Optional[int] = None, limit: int = 10) -> dict:
+    """Scheduled compatibility task for watchlist news fetches."""
+    return fetch_news(symbol=None, limit=limit)
+
+
+@celery_app.task(
+    name="app.workers.tasks.monitor_trades",
+    bind=True,
+    max_retries=3,
+    default_retry_delay=60,
+)
+def monitor_trades(self) -> dict:
+    """Scheduled compatibility task for trade monitoring."""
+    return monitor_broker_positions()

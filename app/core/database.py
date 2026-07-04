@@ -48,10 +48,16 @@ def get_db() -> Generator:
 
 def init_db() -> None:
     """Initialize database by creating all tables."""
+    # Import ORM models so they register with Base.metadata before create_all().
+    import app.models.database  # noqa: F401
+
     Base.metadata.create_all(bind=engine)
 
 
 def reset_db() -> None:
     """Reset database by dropping and recreating all tables."""
+    # Import ORM models so they register with Base.metadata before drop/create.
+    import app.models.database  # noqa: F401
+
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)

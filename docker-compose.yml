@@ -2,6 +2,8 @@ services:
   postgres:
     image: postgres:15-alpine
     container_name: options_tracker_postgres
+    networks:
+      - options_network
     environment:
       POSTGRES_USER: options_user
       POSTGRES_PASSWORD: options_password
@@ -19,6 +21,8 @@ services:
   redis:
     image: redis:7-alpine
     container_name: options_tracker_redis
+    networks:
+      - options_network
     ports:
       - "6379:6379"
     healthcheck:
@@ -42,7 +46,8 @@ services:
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/1
       CELERY_RESULT_BACKEND: redis://redis:6379/2
-      DATA_PROVIDER: mock
+      DATA_PROVIDER: yfinance
+      YFINANCE_ENABLED: "true"
     depends_on:
       postgres:
         condition: service_healthy
@@ -58,7 +63,7 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: options_tracker_celery_worker
-    command: celery -A app.workers.celery_app worker --loglevel=info
+    command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=2 -Q celery,data_fetching,signal_generation,trade_monitoring
     environment:
       ENVIRONMENT: dev
       DEBUG: "True"
@@ -66,7 +71,8 @@ services:
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/1
       CELERY_RESULT_BACKEND: redis://redis:6379/2
-      DATA_PROVIDER: mock
+      DATA_PROVIDER: yfinance
+      YFINANCE_ENABLED: "true"
     depends_on:
       - postgres
       - redis

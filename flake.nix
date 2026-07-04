@@ -16,18 +16,12 @@
       devShells.${system}.default = pkgs.mkShell {
         packages = with pkgs; [
           python311
-          python311Packages.pip
-          python311Packages.virtualenv
-          python311Packages.setuptools
-          python311Packages.wheel
-
           uv
 
           docker
-          docker-compose
-
           postgresql_15
           redis
+
           gcc
           gnumake
           pkg-config
@@ -48,12 +42,7 @@
 
           echo "Stock options dev shell"
           echo "Python: $(python --version)"
-          echo ""
-          echo "Next:"
-          echo "  python -m venv .venv"
-          echo "  source .venv/bin/activate"
-          echo "  pip install -r requirements.txt"
-          echo "  docker compose up -d postgres redis app"
+          echo "Use: uv venv .venv && source .venv/bin/activate && uv pip install -r requirements.txt"
         '';
       };
     };
