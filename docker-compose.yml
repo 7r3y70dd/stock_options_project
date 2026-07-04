@@ -1,28 +1,24 @@
+version: '3.8'
+
 services:
   postgres:
     image: postgres:15-alpine
-    container_name: options_tracker_postgres
-    networks:
-      - options_network
     environment:
-      POSTGRES_USER: options_user
-      POSTGRES_PASSWORD: options_password
-      POSTGRES_DB: options_tracker
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: stock_options
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U options_user"]
+      test: ["CMD-SHELL", "pg_isready -U user"]
       interval: 10s
       timeout: 5s
       retries: 5
 
   redis:
     image: redis:7-alpine
-    container_name: options_tracker_redis
-    networks:
-      - options_network
     ports:
       - "6379:6379"
     healthcheck:
@@ -32,22 +28,29 @@ services:
       retries: 5
 
   app:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: options_tracker_app
+    build: .
     command: uvicorn app.core.main:app --host 0.0.0.0 --port 8000 --reload
     ports:
       - "8000:8000"
     environment:
       ENVIRONMENT: dev
-      DEBUG: "True"
-      DATABASE_URL: postgresql://options_user:options_password@postgres:5432/options_tracker
+      DEBUG: "true"
+      HOST: 0.0.0.0
+      PORT: 8000
+      DATABASE_URL: postgresql://user:password@postgres:5432/stock_options
       REDIS_URL: redis://redis:6379/0
-      CELERY_BROKER_URL: redis://redis:6379/1
-      CELERY_RESULT_BACKEND: redis://redis:6379/2
-      DATA_PROVIDER: yfinance
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      DATA_REFRESH_INTERVAL: 300
+      SIGNAL_GENERATION_INTERVAL: 600
+      TRADE_MONITORING_INTERVAL: 60
+      ALPHA_VANTAGE_API_KEY: ""
+      FINNHUB_API_KEY: ""
       YFINANCE_ENABLED: "true"
+      FRONTEND_API_BASE_URL: http://localhost:8000
+      FRONTEND_DASHBOARD_PREFIX: /api/api/dashboard
+      DEMO_USER_ID: "1"
+      CORS_ORIGINS: http://localhost:3000,http://localhost:8000
     depends_on:
       postgres:
         condition: service_healthy
@@ -55,36 +58,58 @@ services:
         condition: service_healthy
     volumes:
       - .:/app
-    networks:
-      - options_network
 
   celery_worker:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: options_tracker_celery_worker
-    command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=2 -Q celery,data_fetching,signal_generation,trade_monitoring
+    build: .
+    command: celery -A app.workers.celery_app worker --loglevel=info -Q data_fetching,signal_generation,trade_monitoring
     environment:
       ENVIRONMENT: dev
-      DEBUG: "True"
-      DATABASE_URL: postgresql://options_user:options_password@postgres:5432/options_tracker
+      DEBUG: "true"
+      DATABASE_URL: postgresql://user:password@postgres:5432/stock_options
       REDIS_URL: redis://redis:6379/0
-      CELERY_BROKER_URL: redis://redis:6379/1
-      CELERY_RESULT_BACKEND: redis://redis:6379/2
-      DATA_PROVIDER: yfinance
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      DATA_REFRESH_INTERVAL: 300
+      SIGNAL_GENERATION_INTERVAL: 600
+      TRADE_MONITORING_INTERVAL: 60
+      ALPHA_VANTAGE_API_KEY: ""
+      FINNHUB_API_KEY: ""
       YFINANCE_ENABLED: "true"
+      FRONTEND_API_BASE_URL: http://localhost:8000
+      FRONTEND_DASHBOARD_PREFIX: /api/api/dashboard
+      DEMO_USER_ID: "1"
     depends_on:
       - postgres
       - redis
       - app
     volumes:
       - .:/app
-    networks:
-      - options_network
+
+  celery_beat:
+    build: .
+    command: celery -A app.workers.celery_app beat --loglevel=info
+    environment:
+      ENVIRONMENT: dev
+      DEBUG: "true"
+      DATABASE_URL: postgresql://user:password@postgres:5432/stock_options
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      DATA_REFRESH_INTERVAL: 300
+      SIGNAL_GENERATION_INTERVAL: 600
+      TRADE_MONITORING_INTERVAL: 60
+      ALPHA_VANTAGE_API_KEY: ""
+      FINNHUB_API_KEY: ""
+      YFINANCE_ENABLED: "true"
+      FRONTEND_API_BASE_URL: http://localhost:8000
+      FRONTEND_DASHBOARD_PREFIX: /api/api/dashboard
+      DEMO_USER_ID: "1"
+    depends_on:
+      - postgres
+      - redis
+      - app
+    volumes:
+      - .:/app
 
 volumes:
   postgres_data:
-
-networks:
-  options_network:
-    driver: bridge
