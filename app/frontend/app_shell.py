@@ -1,15 +1,11 @@
-"""Frontend app shell with layout and state management.
+"""Frontend app shell for rendering dashboard sections.
 
-Provides the main application structure including:
-- Header with title and status
-- Main content area for dashboard sections
-- Status area for messages and errors
-- Shared loading, error, and empty states
-- Layout utilities
+Provides reusable rendering functions for dashboard components including
+portfolio summary, watchlist, opportunities, trades, news, and risk settings.
 """
 
 import logging
-from typing import Optional, Dict, Any, List
+from typing import Any, Dict, List, Optional
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -17,10 +13,10 @@ logger = logging.getLogger(__name__)
 
 def format_currency(value: Optional[float]) -> str:
     """Format a value as currency.
-
+    
     Args:
-        value: Value to format
-
+        value: Numeric value to format
+        
     Returns:
         Formatted currency string
     """
@@ -31,26 +27,29 @@ def format_currency(value: Optional[float]) -> str:
 
 def format_percentage(value: Optional[float], decimals: int = 2) -> str:
     """Format a value as percentage.
-
+    
     Args:
-        value: Value to format (0-100)
+        value: Numeric value to format (0-100 or 0-1)
         decimals: Number of decimal places
-
+        
     Returns:
         Formatted percentage string
     """
     if value is None:
         return "N/A"
+    # If value is between 0 and 1, assume it's a decimal percentage
+    if -1 <= value <= 1:
+        value = value * 100
     return f"{value:.{decimals}f}%"
 
 
 def format_number(value: Optional[float], decimals: int = 2) -> str:
-    """Format a number with thousands separator.
-
+    """Format a number with thousand separators.
+    
     Args:
-        value: Value to format
+        value: Numeric value to format
         decimals: Number of decimal places
-
+        
     Returns:
         Formatted number string
     """
@@ -59,345 +58,244 @@ def format_number(value: Optional[float], decimals: int = 2) -> str:
     return f"{value:,.{decimals}f}"
 
 
-def render_loading_state() -> Dict[str, Any]:
-    """Render loading state.
-
-    Returns:
-        Loading state dictionary
-    """
-    return {
-        "state": "loading",
-        "message": "Loading...",
-    }
-
-
-def render_error_state(error: str, retry_callback: Optional[str] = None) -> Dict[str, Any]:
-    """Render error state.
-
-    Args:
-        error: Error message
-        retry_callback: Optional callback name for retry button
-
-    Returns:
-        Error state dictionary
-    """
-    return {
-        "state": "error",
-        "message": error,
-        "retry_callback": retry_callback,
-    }
-
-
-def render_empty_state(message: str = "No data available") -> Dict[str, Any]:
-    """Render empty state.
-
-    Args:
-        message: Empty state message
-
-    Returns:
-        Empty state dictionary
-    """
-    return {
-        "state": "empty",
-        "message": message,
-    }
-
-
-def render_portfolio_section(portfolio_data: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+def render_portfolio_section(portfolio_data: Dict[str, Any]) -> str:
     """Render portfolio summary section.
-
-    Args:
-        portfolio_data: Portfolio data from API
-
-    Returns:
-        Rendered portfolio section
-    """
-    if portfolio_data is None:
-        return render_empty_state("Portfolio data not available")
     
-    return {
-        "section": "portfolio",
-        "title": "Portfolio Summary",
-        "cards": [
-            {
-                "label": "Total Value",
-                "value": format_currency(portfolio_data.get("total_value")),
-                "type": "currency",
-            },
-            {
-                "label": "Cash",
-                "value": format_currency(portfolio_data.get("cash")),
-                "type": "currency",
-            },
-            {
-                "label": "Positions Value",
-                "value": format_currency(portfolio_data.get("positions_value")),
-                "type": "currency",
-            },
-            {
-                "label": "Open P/L",
-                "value": format_currency(portfolio_data.get("open_pl")),
-                "type": "currency",
-                "highlight": portfolio_data.get("open_pl", 0) >= 0,
-            },
-            {
-                "label": "Open P/L %",
-                "value": format_percentage(portfolio_data.get("open_pl_pct")),
-                "type": "percentage",
-                "highlight": portfolio_data.get("open_pl_pct", 0) >= 0,
-            },
-            {
-                "label": "Open Trades",
-                "value": str(portfolio_data.get("num_open_trades", 0)),
-                "type": "number",
-            },
-            {
-                "label": "Open Signals",
-                "value": str(portfolio_data.get("num_open_signals", 0)),
-                "type": "number",
-            },
-        ],
-    }
+    Args:
+        portfolio_data: Portfolio summary data
+        
+    Returns:
+        Formatted portfolio section string
+    """
+    try:
+        if not portfolio_data:
+            return "Portfolio: No data available"
+        
+        total_value = portfolio_data.get("total_value", 0)
+        cash = portfolio_data.get("cash", 0)
+        positions_value = portfolio_data.get("positions_value", 0)
+        open_pl = portfolio_data.get("open_pl", 0)
+        open_pl_pct = portfolio_data.get("open_pl_pct", 0)
+        num_open_trades = portfolio_data.get("num_open_trades", 0)
+        num_open_signals = portfolio_data.get("num_open_signals", 0)
+        
+        return f"""
+Portfolio Summary:
+  Total Value: {format_currency(total_value)}
+  Cash: {format_currency(cash)}
+  Positions Value: {format_currency(positions_value)}
+  Open P/L: {format_currency(open_pl)} ({format_percentage(open_pl_pct)})
+  Open Trades: {num_open_trades}
+  Pending Signals: {num_open_signals}
+"""
+    except Exception as e:
+        logger.error(f"Error rendering portfolio section: {e}", exc_info=True)
+        return f"Portfolio: Error rendering data - {e}"
 
 
-def render_watchlist_section(watchlist_data: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+def render_watchlist_section(watchlist_data: Any) -> str:
     """Render watchlist section.
-
+    
+    Handles both list and dict input formats for watchlist data.
+    
     Args:
-        watchlist_data: Watchlist data from API
-
+        watchlist_data: Watchlist data (list of items or dict with symbols key)
+        
     Returns:
-        Rendered watchlist section
+        Formatted watchlist section string
     """
-    if watchlist_data is None:
-        return render_empty_state("Watchlist not available")
-    
-    symbols = watchlist_data.get("symbols", [])
-    
-    if not symbols:
-        return render_empty_state("No symbols in watchlist")
-    
-    return {
-        "section": "watchlist",
-        "title": "Watchlist",
-        "count": watchlist_data.get("count", 0),
-        "symbols": [
-            {
-                "symbol": s["symbol"],
-                "current_price": format_currency(s.get("current_price")),
-                "added_at": s.get("added_at"),
-                "last_updated": s.get("last_updated"),
-                "data_freshness_seconds": s.get("data_freshness_seconds"),
-            }
-            for s in symbols
-        ],
-    }
+    try:
+        # Handle different input formats
+        if isinstance(watchlist_data, list):
+            items = watchlist_data
+        elif isinstance(watchlist_data, dict):
+            items = watchlist_data.get("symbols", [])
+            if not isinstance(items, list):
+                items = []
+        else:
+            items = []
+        
+        if not items:
+            return "Watchlist: No symbols"
+        
+        lines = ["Watchlist:"]
+        for item in items:
+            if isinstance(item, dict):
+                symbol = item.get("symbol", "UNKNOWN")
+                current_price = item.get("current_price")
+                last_updated = item.get("last_updated")
+                data_freshness = item.get("data_freshness_seconds")
+                
+                price_str = format_currency(current_price) if current_price else "N/A"
+                freshness_str = f"{data_freshness}s ago" if data_freshness else "N/A"
+                
+                lines.append(f"  {symbol}: {price_str} (updated {freshness_str})")
+            else:
+                # Handle non-dict items gracefully
+                lines.append(f"  {item}")
+        
+        return "\n".join(lines)
+    except Exception as e:
+        logger.error(f"Error rendering watchlist section: {e}", exc_info=True)
+        return f"Watchlist: Error rendering data - {e}"
 
 
-def render_opportunities_section(opportunities_data: Optional[List[Dict[str, Any]]]) -> Dict[str, Any]:
+def render_opportunities_section(opportunities_data: List[Dict[str, Any]]) -> str:
     """Render top opportunities section.
-
+    
     Args:
-        opportunities_data: Opportunities data from API
-
+        opportunities_data: List of opportunity items
+        
     Returns:
-        Rendered opportunities section
+        Formatted opportunities section string
     """
-    if opportunities_data is None:
-        return render_empty_state("Opportunities not available")
-    
-    if not opportunities_data:
-        return render_empty_state("No opportunities available")
-    
-    return {
-        "section": "opportunities",
-        "title": "Top Opportunities",
-        "count": len(opportunities_data),
-        "opportunities": [
-            {
-                "signal_id": opp.get("signal_id"),
-                "symbol": opp.get("symbol"),
-                "strategy_type": opp.get("strategy_type"),
-                "score": format_number(opp.get("score"), 1),
-                "expected_profit": format_currency(opp.get("expected_profit")),
-                "max_loss": format_currency(opp.get("max_loss")),
-                "probability_estimate": format_percentage(opp.get("probability_estimate") * 100, 1),
-                "reason": opp.get("reason"),
-                "status": opp.get("status"),
-            }
-            for opp in opportunities_data
-        ],
-    }
-
-
-def render_trades_section(trades_data: Optional[List[Dict[str, Any]]]) -> Dict[str, Any]:
-    """Render open trades section.
-
-    Args:
-        trades_data: Trades data from API
-
-    Returns:
-        Rendered trades section
-    """
-    if trades_data is None:
-        return render_empty_state("Trades not available")
-    
-    if not trades_data:
-        return render_empty_state("No open trades")
-    
-    return {
-        "section": "trades",
-        "title": "Open Trades",
-        "count": len(trades_data),
-        "trades": [
-            {
-                "trade_id": trade.get("trade_id"),
-                "symbol": trade.get("symbol"),
-                "strategy_type": trade.get("strategy_type"),
-                "entry_price": format_currency(trade.get("entry_price")),
-                "current_price": format_currency(trade.get("current_price")),
-                "quantity": str(trade.get("quantity", 0)),
-                "entry_date": trade.get("entry_date"),
-                "current_pl": format_currency(trade.get("current_pl")),
-                "current_pl_pct": format_percentage(trade.get("current_pl_pct")),
-                "status": trade.get("status"),
-            }
-            for trade in trades_data
-        ],
-    }
-
-
-def render_news_section(news_data: Optional[List[Dict[str, Any]]]) -> Dict[str, Any]:
-    """Render recent news section.
-
-    Args:
-        news_data: News data from API
-
-    Returns:
-        Rendered news section
-    """
-    if news_data is None:
-        return render_empty_state("News not available")
-    
-    if not news_data:
-        return render_empty_state("No recent news")
-    
-    return {
-        "section": "news",
-        "title": "Recent News",
-        "count": len(news_data),
-        "articles": [
-            {
-                "article_id": article.get("article_id"),
-                "symbol": article.get("symbol"),
-                "title": article.get("title"),
-                "description": article.get("description"),
-                "url": article.get("url"),
-                "source": article.get("source"),
-                "published_at": article.get("published_at"),
-                "sentiment": article.get("sentiment"),
-                "sentiment_score": format_number(article.get("sentiment_score"), 2) if article.get("sentiment_score") else "N/A",
-                "event_type": article.get("event_type"),
-            }
-            for article in news_data
-        ],
-    }
-
-
-def render_risk_settings_section(risk_data: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    """Render risk settings section.
-
-    Args:
-        risk_data: Risk settings data from API
-
-    Returns:
-        Rendered risk settings section
-    """
-    if risk_data is None:
-        return render_empty_state("Risk settings not available")
-    
-    return {
-        "section": "risk_settings",
-        "title": "Risk Settings",
-        "risk_level": risk_data.get("risk_level"),
-        "paper_trading_enabled": risk_data.get("paper_trading_enabled"),
-        "live_trading_enabled": risk_data.get("live_trading_enabled"),
-        "live_trading_approved": risk_data.get("live_trading_approved"),
-        "risk_levels_info": risk_data.get("risk_levels_info", []),
-    }
-
-
-class AppShell:
-    """Main application shell."""
-
-    def __init__(self, api_client: Any, user_id: int = 1):
-        """Initialize app shell.
-
-        Args:
-            api_client: API client instance
-            user_id: User ID for demo
-        """
-        self.api_client = api_client
-        self.user_id = user_id
-        self.dashboard_data: Optional[Dict[str, Any]] = None
-        self.loading = False
-        self.error: Optional[str] = None
-        self.last_refresh: Optional[datetime] = None
-
-    async def load_dashboard(self) -> None:
-        """Load dashboard data from API."""
-        try:
-            self.loading = True
-            self.error = None
+    try:
+        if not opportunities_data:
+            return "Top Opportunities: None"
+        
+        lines = ["Top Opportunities:"]
+        for opp in opportunities_data[:5]:  # Show top 5
+            symbol = opp.get("symbol", "UNKNOWN")
+            strategy = opp.get("strategy_type", "UNKNOWN")
+            score = opp.get("score", 0)
+            expected_profit = opp.get("expected_profit", 0)
+            max_loss = opp.get("max_loss", 0)
             
-            self.dashboard_data = await self.api_client.get_dashboard(self.user_id)
-            self.last_refresh = datetime.now()
-        except Exception as e:
-            logger.error(f"Error loading dashboard: {e}")
-            self.error = f"Failed to load dashboard: {str(e)}"
-            self.dashboard_data = None
-        finally:
-            self.loading = False
+            lines.append(
+                f"  {symbol} ({strategy}): Score {format_percentage(score/100)} | "
+                f"Profit {format_currency(expected_profit)} | Loss {format_currency(max_loss)}"
+            )
+        
+        return "\n".join(lines)
+    except Exception as e:
+        logger.error(f"Error rendering opportunities section: {e}", exc_info=True)
+        return f"Top Opportunities: Error rendering data - {e}"
 
-    def render(self) -> Dict[str, Any]:
-        """Render app shell.
 
-        Returns:
-            Rendered app shell state
-        """
-        if self.loading:
-            return {
-                "state": "loading",
-                "message": "Loading dashboard...",
-            }
+def render_trades_section(trades_data: List[Dict[str, Any]]) -> str:
+    """Render open trades section.
+    
+    Args:
+        trades_data: List of trade items
         
-        if self.error:
-            return {
-                "state": "error",
-                "message": self.error,
-                "retry_callback": "load_dashboard",
-            }
+    Returns:
+        Formatted trades section string
+    """
+    try:
+        if not trades_data:
+            return "Open Trades: None"
         
-        if not self.dashboard_data:
-            return {
-                "state": "empty",
-                "message": "No dashboard data available",
-            }
+        lines = ["Open Trades:"]
+        for trade in trades_data[:5]:  # Show top 5
+            symbol = trade.get("symbol", "UNKNOWN")
+            strategy = trade.get("strategy_type", "UNKNOWN")
+            entry_price = trade.get("entry_price", 0)
+            current_price = trade.get("current_price")
+            quantity = trade.get("quantity", 0)
+            current_pl = trade.get("current_pl")
+            current_pl_pct = trade.get("current_pl_pct")
+            
+            current_price_str = format_currency(current_price) if current_price else "N/A"
+            pl_str = format_currency(current_pl) if current_pl else "N/A"
+            pl_pct_str = format_percentage(current_pl_pct) if current_pl_pct else "N/A"
+            
+            lines.append(
+                f"  {symbol} ({strategy}): {quantity} @ {format_currency(entry_price)} | "
+                f"Current {current_price_str} | P/L {pl_str} ({pl_pct_str})"
+            )
         
-        return {
-            "state": "success",
-            "header": {
-                "title": "Stock Options Dashboard",
-                "user_id": self.user_id,
-                "last_refresh": self.last_refresh.isoformat() if self.last_refresh else None,
-            },
-            "sections": {
-                "portfolio": render_portfolio_section(self.dashboard_data.get("portfolio_summary")),
-                "watchlist": render_watchlist_section(self.dashboard_data.get("watchlist")),
-                "opportunities": render_opportunities_section(self.dashboard_data.get("top_opportunities")),
-                "trades": render_trades_section(self.dashboard_data.get("open_trades")),
-                "news": render_news_section(self.dashboard_data.get("recent_news")),
-                "risk_settings": render_risk_settings_section(self.dashboard_data.get("risk_settings")),
-            },
-            "timestamp": self.dashboard_data.get("timestamp"),
-        }
+        return "\n".join(lines)
+    except Exception as e:
+        logger.error(f"Error rendering trades section: {e}", exc_info=True)
+        return f"Open Trades: Error rendering data - {e}"
+
+
+def render_news_section(news_data: List[Dict[str, Any]]) -> str:
+    """Render recent news section.
+    
+    Args:
+        news_data: List of news items
+        
+    Returns:
+        Formatted news section string
+    """
+    try:
+        if not news_data:
+            return "Recent News: None"
+        
+        lines = ["Recent News:"]
+        for article in news_data[:5]:  # Show top 5
+            symbol = article.get("symbol", "UNKNOWN")
+            title = article.get("title", "No title")
+            sentiment = article.get("sentiment", "neutral")
+            source = article.get("source", "Unknown")
+            
+            lines.append(f"  [{symbol}] {title} ({sentiment}) - {source}")
+        
+        return "\n".join(lines)
+    except Exception as e:
+        logger.error(f"Error rendering news section: {e}", exc_info=True)
+        return f"Recent News: Error rendering data - {e}"
+
+
+def render_risk_settings_section(risk_settings_data: Dict[str, Any]) -> str:
+    """Render risk settings section.
+    
+    Args:
+        risk_settings_data: Risk settings data
+        
+    Returns:
+        Formatted risk settings section string
+    """
+    try:
+        if not risk_settings_data:
+            return "Risk Settings: No data available"
+        
+        risk_level = risk_settings_data.get("risk_level", "medium")
+        paper_trading = risk_settings_data.get("paper_trading_enabled", True)
+        live_trading = risk_settings_data.get("live_trading_enabled", False)
+        live_approved = risk_settings_data.get("live_trading_approved", False)
+        
+        return f"""
+Risk Settings:
+  Risk Level: {risk_level.upper()}
+  Paper Trading: {'Enabled' if paper_trading else 'Disabled'}
+  Live Trading: {'Enabled' if live_trading else 'Disabled'}
+  Live Trading Approved: {'Yes' if live_approved else 'No'}
+"""
+    except Exception as e:
+        logger.error(f"Error rendering risk settings section: {e}", exc_info=True)
+        return f"Risk Settings: Error rendering data - {e}"
+
+
+def render_dashboard(
+    dashboard_data: Dict[str, Any],
+) -> str:
+    """Render complete dashboard.
+    
+    Args:
+        dashboard_data: Complete dashboard data
+        
+    Returns:
+        Formatted dashboard string
+    """
+    try:
+        if not dashboard_data:
+            return "Dashboard: No data available"
+        
+        timestamp = dashboard_data.get("timestamp", datetime.utcnow().isoformat())
+        
+        sections = [
+            f"\n=== Dashboard ({timestamp}) ===",
+            render_portfolio_section(dashboard_data.get("portfolio_summary", {})),
+            render_watchlist_section(dashboard_data.get("watchlist", [])),
+            render_opportunities_section(dashboard_data.get("top_opportunities", [])),
+            render_trades_section(dashboard_data.get("open_trades", [])),
+            render_news_section(dashboard_data.get("recent_news", [])),
+            render_risk_settings_section(dashboard_data.get("risk_settings", {})),
+        ]
+        
+        return "\n".join(sections)
+    except Exception as e:
+        logger.error(f"Error rendering dashboard: {e}", exc_info=True)
+        return f"Dashboard: Error rendering - {e}"
