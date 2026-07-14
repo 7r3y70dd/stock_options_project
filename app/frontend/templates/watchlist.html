@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Watchlist - Options Tracker</title>
+    <link rel="stylesheet" href="/static/app.css">
+    <link rel="stylesheet" href="/static/watchlist.css">
+</head>
+<body>
+    <div class="app-container">
+        <nav class="navbar">
+            <div class="navbar-brand">Options Tracker</div>
+            <ul class="navbar-nav">
+                <li><a href="/dashboard">Dashboard</a></li>
+                <li><a href="/opportunities">Opportunities</a></li>
+                <li><a href="/watchlist" class="active">Watchlist</a></li>
+                <li><a href="/portfolio">Portfolio</a></li>
+            </ul>
+        </nav>
+
+        <main class="main-content">
+            <div class="page-header">
+                <h1>Watchlist</h1>
+                <div class="header-actions">
+                    <button id="refreshBtn" class="btn btn-primary">Refresh</button>
+                </div>
+            </div>
+
+            <div id="loadingState" class="loading-state hidden">
+                <p>Loading watchlist...</p>
+            </div>
+
+            <div id="errorState" class="error-state hidden">
+                <p id="errorMessage"></p>
+                <button onclick="location.reload()" class="btn btn-secondary">Retry</button>
+            </div>
+
+            <div id="contentState" class="content-state">
+                <!-- Add Symbol Section -->
+                <section class="add-symbol-section">
+                    <h2>Add Symbol</h2>
+                    <form id="addSymbolForm" class="add-symbol-form">
+                        <div class="form-group">
+                            <label for="symbolInput">Symbol:</label>
+                            <input 
+                                type="text" 
+                                id="symbolInput" 
+                                placeholder="e.g., AAPL" 
+                                maxlength="10"
+                                required
+                            >
+                        </div>
+                        <button type="submit" class="btn btn-primary">Add</button>
+                    </form>
+                    <div id="validationMessage" class="validation-message hidden"></div>
+                </section>
+
+                <!-- Watchlist Stats -->
+                <section class="watchlist-stats">
+                    <div class="stat-card">
+                        <div class="stat-label">Total Symbols</div>
+                        <div class="stat-value" id="symbolCount">0</div>
+                    </div>
+                </section>
+
+                <!-- Empty State -->
+                <div id="emptyState" class="empty-state hidden">
+                    <p>No symbols in your watchlist yet.</p>
+                    <p>Add a symbol above to get started.</p>
+                </div>
+
+                <!-- Watchlist Table -->
+                <section id="watchlistSection" class="watchlist-section hidden">
+                    <h2>Your Watchlist</h2>
+                    <div class="table-responsive">
+                        <table class="watchlist-table">
+                            <thead>
+                                <tr>
+                                    <th>Symbol</th>
+                                    <th>Current Price</th>
+                                    <th>Added Date</th>
+                                    <th>Last Updated</th>
+                                    <th>Data Freshness</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="watchlistBody">
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+            </div>
+        </main>
+    </div>
+
+    <script src="/static/app.js"></script>
+    <script src="/static/watchlist.js"></script>
+</body>
+</html>
