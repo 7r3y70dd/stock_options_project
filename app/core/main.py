@@ -1,81 +1,94 @@
-import os
-from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse
-from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
+import logging
 from contextlib import asynccontextmanager
 
-from app.api.health import router as health_router
-from app.api.dashboard import router as dashboard_router
-from app.core.config import settings
-from app.core.database import init_db
+from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import HTMLResponse
+from fastapi.templating import Jinja2Templates
+from starlette.requests import Request
 
-# Initialize database
-init_db()
+from app.api import health, dashboard
+from app.core import config
 
-# Setup templates and static files
-template_dir = os.path.join(os.path.dirname(__file__), '..', 'frontend', 'templates')
-static_dir = os.path.join(os.path.dirname(__file__), '..', 'frontend', 'static')
+logger = logging.getLogger(__name__)
 
-templates = Jinja2Templates(directory=template_dir)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
+    logger.info("Application startup")
     yield
-    # Shutdown
+    logger.info("Application shutdown")
 
-app = FastAPI(title="Options Tracker", lifespan=lifespan)
+
+app = FastAPI(
+    title="Options Tracker API",
+    description="API for options trading strategies",
+    version=config.VERSION,
+    lifespan=lifespan,
+)
 
 # Mount static files
-if os.path.exists(static_dir):
-    app.mount("/static", StaticFiles(directory=static_dir), name="static")
+app.mount("/static", StaticFiles(directory="app/frontend/static"), name="static")
+
+# Setup Jinja2 templates
+templates = Jinja2Templates(directory="app/frontend/templates")
 
 # Include API routers
-app.include_router(health_router, prefix="/api", tags=["health"])
-app.include_router(dashboard_router, prefix="/api/api", tags=["dashboard"])
+app.include_router(health.router, prefix="/api", tags=["health"])
+app.include_router(dashboard.router, prefix="/api", tags=["dashboard"])
 
-# HTML Routes
+
 @app.get("/", response_class=HTMLResponse)
 async def root(request: Request):
+    """Root endpoint redirects to dashboard."""
     return templates.TemplateResponse("dashboard.html", {"request": request})
+
 
 @app.get("/dashboard", response_class=HTMLResponse)
-async def dashboard(request: Request):
+async def dashboard_page(request: Request):
+    """Dashboard page."""
     return templates.TemplateResponse("dashboard.html", {"request": request})
 
+
 @app.get("/opportunities", response_class=HTMLResponse)
-async def opportunities(request: Request):
+async def opportunities_page(request: Request):
+    """Opportunities page."""
     return templates.TemplateResponse("opportunities.html", {"request": request})
 
+
 @app.get("/opportunities/{signal_id}", response_class=HTMLResponse)
-async def opportunity_detail(request: Request, signal_id: int):
-    return templates.TemplateResponse("opportunity_detail.html", {"request": request, "signal_id": signal_id})
+async def opportunity_detail_page(request: Request, signal_id: int):
+    """Opportunity detail page."""
+    return templates.TemplateResponse(
+        "opportunity_detail.html", {"request": request, "signal_id": signal_id}
+    )
+
 
 @app.get("/portfolio", response_class=HTMLResponse)
-async def portfolio(request: Request):
+async def portfolio_page(request: Request):
+    """Portfolio page."""
     return templates.TemplateResponse("portfolio.html", {"request": request})
 
-@app.get("/trades", response_class=HTMLResponse)
-async def trades(request: Request):
-    return templates.TemplateResponse("trades.html", {"request": request})
 
 @app.get("/watchlist", response_class=HTMLResponse)
-async def watchlist(request: Request):
+async def watchlist_page(request: Request):
+    """Watchlist page."""
     return templates.TemplateResponse("watchlist.html", {"request": request})
 
+
 @app.get("/risk-settings", response_class=HTMLResponse)
-async def risk_settings(request: Request):
+async def risk_settings_page(request: Request):
+    """Risk settings page."""
     return templates.TemplateResponse("risk_settings.html", {"request": request})
 
+
 @app.get("/news", response_class=HTMLResponse)
-async def news(request: Request):
+async def news_page(request: Request):
+    """News page."""
     return templates.TemplateResponse("news.html", {"request": request})
 
-@app.get("/status", response_class=HTMLResponse)
-async def status(request: Request):
-    return templates.TemplateResponse("status.html", {"request": request})
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+@app.get("/status", response_class=HTMLResponse)
+async def status_page(request: Request):
+    """System status page."""
+    return templates.TemplateResponse("status.html", {"request": request})
