@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+
+{% block title %}Opportunities - Options Tracker{% endblock %}
+
+{% block content %}
+<div class="opportunities-container">
+  <div class="opportunities-header">
+    <h1>Opportunities</h1>
+    <div class="opportunities-controls">
+      <button id="refresh-btn" class="btn btn-primary">Refresh</button>
+    </div>
+  </div>
+
+  <div class="opportunities-toolbar">
+    <div class="toolbar-section">
+      <label for="filter-symbol">Symbol:</label>
+      <input type="text" id="filter-symbol" class="filter-input" placeholder="e.g., AAPL">
+    </div>
+    <div class="toolbar-section">
+      <label for="filter-strategy">Strategy:</label>
+      <select id="filter-strategy" class="filter-select">
+        <option value="">All Strategies</option>
+        <option value="cash_secured_put">Cash Secured Put</option>
+        <option value="covered_call">Covered Call</option>
+        <option value="credit_spread">Credit Spread</option>
+        <option value="debit_spread">Debit Spread</option>
+        <option value="long_call_put">Long Call/Put</option>
+      </select>
+    </div>
+    <div class="toolbar-section">
+      <label for="filter-status">Status:</label>
+      <select id="filter-status" class="filter-select">
+        <option value="">All Statuses</option>
+        <option value="pending">Pending</option>
+        <option value="active">Active</option>
+        <option value="closed">Closed</option>
+      </select>
+    </div>
+    <div class="toolbar-section">
+      <label for="filter-contract">Contract Type:</label>
+      <select id="filter-contract" class="filter-select">
+        <option value="">All Types</option>
+        <option value="call">Call</option>
+        <option value="put">Put</option>
+      </select>
+    </div>
+    <div class="toolbar-section">
+      <label for="sort-by">Sort By:</label>
+      <select id="sort-by" class="filter-select">
+        <option value="score-desc">Score (High to Low)</option>
+        <option value="score-asc">Score (Low to High)</option>
+        <option value="profit-desc">Expected Profit (High to Low)</option>
+        <option value="profit-asc">Expected Profit (Low to High)</option>
+        <option value="loss-desc">Max Loss (High to Low)</option>
+        <option value="loss-asc">Max Loss (Low to High)</option>
+        <option value="probability-desc">Probability (High to Low)</option>
+        <option value="probability-asc">Probability (Low to High)</option>
+        <option value="date-desc">Created (Newest First)</option>
+        <option value="date-asc">Created (Oldest First)</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="opportunities-count">
+    <span id="count-display">Loading...</span>
+  </div>
+
+  <div id="loading-state" class="loading-state" style="display: none;">
+    <div class="spinner"></div>
+    <p>Loading opportunities...</p>
+  </div>
+
+  <div id="error-state" class="error-state" style="display: none;">
+    <p id="error-message"></p>
+    <button id="retry-btn" class="btn btn-secondary">Retry</button>
+  </div>
+
+  <div id="empty-state" class="empty-state" style="display: none;">
+    <p>No opportunities found.</p>
+  </div>
+
+  <div id="opportunities-table-container" class="opportunities-table-container" style="display: none;">
+    <table class="opportunities-table">
+      <thead>
+        <tr>
+          <th>Symbol</th>
+          <th>Strategy</th>
+          <th>Score</th>
+          <th>Expected Profit</th>
+          <th>Max Loss</th>
+          <th>Probability</th>
+          <th>Status</th>
+          <th>Created</th>
+          <th>Expiration</th>
+          <th>Strike</th>
+          <th>Type</th>
+          <th>Bid / Mid / Ask</th>
+          <th>Volume</th>
+          <th>Open Interest</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody id="opportunities-tbody">
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<script src="{{ url_for('static', path='formatters.js') }}"></script>
+<script src="{{ url_for('static', path='app.js') }}"></script>
+<script src="{{ url_for('static', path='opportunities.js') }}"></script>
+{% endblock %}
