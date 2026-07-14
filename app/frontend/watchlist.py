@@ -1,200 +1,153 @@
-"""Watchlist UI component for managing user's watched symbols.
+"""Watchlist component for managing watched symbols.
 
-Provides a reusable watchlist panel with:
-- Display of current watchlist symbols
-- Add symbol functionality with validation
-- Remove symbol functionality
-- Current price display (when available)
-- Data freshness indicators
-- Loading and error states
+Provides a component for displaying, adding, and removing symbols
+from the user's watchlist.
 """
 
 import logging
-from typing import Optional, List, Dict, Any, Callable
-from dataclasses import dataclass
+from typing import Any, Dict, List, Optional
+from app.frontend.formatters import format_currency, format_date
+from app.frontend.app_shell import LoadingState
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class WatchlistSymbolDisplay:
-    """Display data for a watchlist symbol."""
-    symbol: str
-    current_price: Optional[float]
-    added_at: str
-    last_updated: Optional[str]
-    data_freshness_seconds: Optional[int]
-
-
 class WatchlistComponent:
-    """Watchlist UI component."""
-
-    def __init__(
-        self,
-        user_id: int,
-        api_client: Any,  # APIClient instance
-    ):
-        """Initialize watchlist component.
-
-        Args:
-            user_id: User ID
-            api_client: API client for backend calls
-        """
-        self.user_id = user_id
-        self.api_client = api_client
-        self.symbols: List[WatchlistSymbolDisplay] = []
-        self.loading = False
-        self.error: Optional[str] = None
+    """Component for managing watchlist."""
+    
+    def __init__(self):
+        """Initialize watchlist component."""
+        self.loading_state = LoadingState.IDLE
+        self.error_message: Optional[str] = None
+        self.symbols: List[Dict[str, Any]] = []
         self.validation_error: Optional[str] = None
-        self.add_input_value = ""
-        self.pending_add: Optional[str] = None  # Symbol being added
-        self.pending_remove: Optional[str] = None  # Symbol being removed
-
-    async def load_watchlist(self) -> None:
-        """Load watchlist from API."""
-        try:
-            self.loading = True
-            self.error = None
-            
-            watchlist_data = await self.api_client.get_watchlist(self.user_id)
-            
-            self.symbols = [
-                WatchlistSymbolDisplay(
-                    symbol=item["symbol"],
-                    current_price=item["current_price"],
-                    added_at=item["added_at"],
-                    last_updated=item["last_updated"],
-                    data_freshness_seconds=item["data_freshness_seconds"],
-                )
-                for item in watchlist_data.get("symbols", [])
-            ]
-        except Exception as e:
-            logger.error(f"Error loading watchlist: {e}")
-            self.error = "Failed to load watchlist"
-            self.symbols = []
-        finally:
-            self.loading = False
-
-    async def validate_symbol(self, symbol: str) -> bool:
-        """Validate a symbol before adding.
-
+        self.add_in_progress = False
+    
+    def set_symbols(self, symbols: List[Dict[str, Any]]) -> None:
+        """Set watchlist symbols.
+        
         Args:
-            symbol: Symbol to validate
-
-        Returns:
-            True if valid, False otherwise
+            symbols: List of symbol data dictionaries
         """
-        try:
-            self.validation_error = None
-            
-            if not symbol or not symbol.strip():
-                self.validation_error = "Symbol cannot be empty"
-                return False
-            
-            result = await self.api_client.validate_symbol(symbol)
-            
-            if not result.get("valid", False):
-                self.validation_error = result.get("message", "Invalid symbol")
-                return False
-            
-            return True
-        except Exception as e:
-            logger.error(f"Error validating symbol: {e}")
-            self.validation_error = "Error validating symbol"
-            return False
-
-    async def add_symbol(self, symbol: str) -> bool:
-        """Add a symbol to watchlist.
-
+        self.symbols = symbols
+        self.loading_state = LoadingState.SUCCESS if symbols else LoadingState.EMPTY
+        self.error_message = None
+    
+    def set_loading(self) -> None:
+        """Set component to loading state."""
+        self.loading_state = LoadingState.LOADING
+        self.error_message = None
+    
+    def set_error(self, message: str) -> None:
+        """Set component to error state.
+        
         Args:
-            symbol: Symbol to add
-
-        Returns:
-            True if successful, False otherwise
+            message: Error message
         """
-        try:
-            # Validate first
-            if not await self.validate_symbol(symbol):
-                return False
-            
-            # Check for duplicates in UI
-            symbol_upper = symbol.upper().strip()
-            if any(s.symbol == symbol_upper for s in self.symbols):
-                self.validation_error = f"Symbol {symbol_upper} already in watchlist"
-                return False
-            
-            self.pending_add = symbol_upper
-            self.error = None
-            
-            result = await self.api_client.add_watchlist_symbol(self.user_id, symbol_upper)
-            
-            if result.get("status") == "success":
-                # Reload watchlist to get fresh data
-                await self.load_watchlist()
-                self.add_input_value = ""  # Clear input
-                self.validation_error = None
-                return True
-            else:
-                self.error = result.get("message", "Failed to add symbol")
-                return False
-        except Exception as e:
-            logger.error(f"Error adding symbol: {e}")
-            self.error = "Failed to add symbol"
-            return False
-        finally:
-            self.pending_add = None
-
-    async def remove_symbol(self, symbol: str) -> bool:
-        """Remove a symbol from watchlist.
-
+        self.loading_state = LoadingState.ERROR
+        self.error_message = message
+    
+    def set_validation_error(self, message: str) -> None:
+        """Set validation error.
+        
         Args:
-            symbol: Symbol to remove
-
-        Returns:
-            True if successful, False otherwise
+            message: Validation error message
         """
-        try:
-            self.pending_remove = symbol
-            self.error = None
-            
-            result = await self.api_client.remove_watchlist_symbol(self.user_id, symbol)
-            
-            if result.get("status") == "success":
-                # Reload watchlist to get fresh data
-                await self.load_watchlist()
-                return True
-            else:
-                self.error = result.get("message", "Failed to remove symbol")
-                return False
-        except Exception as e:
-            logger.error(f"Error removing symbol: {e}")
-            self.error = "Failed to remove symbol"
-            return False
-        finally:
-            self.pending_remove = None
-
-    def render(self) -> Dict[str, Any]:
-        """Render watchlist component state.
-
+        self.validation_error = message
+    
+    def clear_validation_error(self) -> None:
+        """Clear validation error."""
+        self.validation_error = None
+    
+    def render(self) -> str:
+        """Render watchlist component.
+        
         Returns:
-            Dictionary with component state for rendering
+            Formatted watchlist string
         """
-        return {
-            "symbols": [
-                {
-                    "symbol": s.symbol,
-                    "current_price": s.current_price,
-                    "added_at": s.added_at,
-                    "last_updated": s.last_updated,
-                    "data_freshness_seconds": s.data_freshness_seconds,
-                }
-                for s in self.symbols
-            ],
-            "count": len(self.symbols),
-            "loading": self.loading,
-            "error": self.error,
-            "validation_error": self.validation_error,
-            "add_input_value": self.add_input_value,
-            "pending_add": self.pending_add,
-            "pending_remove": self.pending_remove,
-        }
+        if self.loading_state == LoadingState.LOADING:
+            return self._render_loading()
+        elif self.loading_state == LoadingState.ERROR:
+            return self._render_error()
+        elif self.loading_state == LoadingState.EMPTY:
+            return self._render_empty()
+        else:
+            return self._render_success()
+    
+    def _render_loading(self) -> str:
+        """Render loading state.
+        
+        Returns:
+            Loading state string
+        """
+        return """
+┌─ Watchlist ──────────────────────────────────────────────────────┐
+│                                                                  │
+│                    ⟳ Loading watchlist...                        │
+│                                                                  │
+└──────────────────────────────────────────────────────────────────┘
+"""
+    
+    def _render_error(self) -> str:
+        """Render error state.
+        
+        Returns:
+            Error state string
+        """
+        return f"""
+┌─ Watchlist ──────────────────────────────────────────────────────┐
+│                                                                  │
+│  ✗ Error: {self.error_message[:50].ljust(50)}  │
+│                                                                  │
+│  [Retry]                                                         │
+│                                                                  │
+└──────────────────────────────────────────────────────────────────┘
+"""
+    
+    def _render_empty(self) -> str:
+        """Render empty state.
+        
+        Returns:
+            Empty state string
+        """
+        return """
+┌─ Watchlist ──────────────────────────────────────────────────────┐
+│                                                                  │
+│  ○ No symbols in watchlist                                       │
+│                                                                  │
+│  Add Symbol: [________]  [Validate]  [Add]                       │
+│                                                                  │
+└──────────────────────────────────────────────────────────────────┘
+"""
+    
+    def _render_success(self) -> str:
+        """Render success state with symbols.
+        
+        Returns:
+            Formatted watchlist string
+        """
+        lines = ["┌─ Watchlist ──────────────────────────────────────────────────────┐"]
+        lines.append("│                                                                  │")
+        lines.append(f"│  Symbols: {len(self.symbols):2}                                                    │")
+        lines.append("│                                                                  │")
+        
+        for symbol_data in self.symbols[:10]:  # Show top 10
+            symbol = symbol_data.get('symbol', 'UNKNOWN')
+            price = format_currency(symbol_data.get('current_price'))
+            added_at = format_date(symbol_data.get('added_at'), "%Y-%m-%d")
+            freshness = symbol_data.get('data_freshness_seconds')
+            freshness_str = f"{freshness}s ago" if freshness else "N/A"
+            
+            lines.append(f"│  {symbol:6} | Price: {price:12} | Added: {added_at} | {freshness_str:10} │")
+        
+        lines.append("│                                                                  │")
+        
+        if self.validation_error:
+            lines.append(f"│  ✗ {self.validation_error[:56].ljust(56)}  │")
+            lines.append("│                                                                  │")
+        
+        lines.append("│  Add Symbol: [________]  [Validate]  [Add]                       │")
+        lines.append("│                                                                  │")
+        lines.append("└──────────────────────────────────────────────────────────────────┘")
+        
+        return "\n".join(lines)
