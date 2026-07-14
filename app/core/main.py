@@ -1,48 +1,53 @@
-"""Main application factory and setup."""
+"""Main FastAPI application."""
+
+import logging
+from pathlib import Path
 
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+from fastapi.routing import APIRoute
 
-from app.core.config import get_config
-from app.core.database import init_db
+from app.api import health, dashboard
+from app.core.config import settings
+
+logger = logging.getLogger(__name__)
+
+# Create FastAPI app
+app = FastAPI(
+    title="Options Tracker",
+    description="AI-powered options trading tracker and analyzer",
+    version="0.1.0",
+)
+
+# Include API routers
+app.include_router(health.router)
+app.include_router(dashboard.router)
+
+# Setup static files
+static_dir = Path(__file__).parent.parent / "frontend" / "static"
+if static_dir.exists():
+    app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+
+# Dashboard HTML route
+@app.get("/dashboard")
+async def dashboard_page():
+    """Serve the dashboard HTML page."""
+    template_path = Path(__file__).parent.parent / "frontend" / "templates" / "dashboard.html"
+    if template_path.exists():
+        return FileResponse(str(template_path), media_type="text/html")
+    else:
+        return {"error": "Dashboard template not found"}, 404
 
 
-def create_app() -> FastAPI:
-    """Create and configure the FastAPI application.
-    
-    Returns:
-        Configured FastAPI application instance.
+def use_route_names_as_operation_ids(app: FastAPI) -> None:
     """
-    app = FastAPI(
-        title="Stock Options Trading System",
-        description="AI-powered options trading strategy analyzer",
-        version="1.0.0",
-    )
-
-    # Get config
-    config = get_config()
-
-    # Initialize database
-    init_db()
-
-    # Add CORS middleware
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-
-    # Import and include routers
-    from app.api.dashboard import router as dashboard_router
-    from app.api.health import router as health_router
-
-    app.include_router(health_router, prefix="/api", tags=["health"])
-    app.include_router(dashboard_router, prefix="/api", tags=["dashboard"])
-
-    return app
+    Simplify operation IDs so that generated API clients have simpler function
+    names.
+    """
+    for route in app.routes:
+        if isinstance(route, APIRoute):
+            route.operation_id = route.name
 
 
-# Create the app instance
-app = create_app()
+use_route_names_as_operation_ids(app)
