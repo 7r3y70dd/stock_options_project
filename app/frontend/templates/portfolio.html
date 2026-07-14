@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+
+{% block title %}Portfolio - Options Tracker{% endblock %}
+
+{% block content %}
+<div class="portfolio-container">
+  <div class="portfolio-header">
+    <h1>Portfolio</h1>
+    <button id="refresh-btn" class="btn btn-primary">Refresh</button>
+  </div>
+
+  <div id="loading" class="loading-state" style="display: none;">
+    <div class="spinner"></div>
+    <p>Loading portfolio data...</p>
+  </div>
+
+  <div id="error" class="error-state" style="display: none;">
+    <div class="error-content">
+      <h3>Error Loading Portfolio</h3>
+      <p id="error-message"></p>
+      <button class="btn btn-secondary" onclick="loadPortfolio()">Retry</button>
+    </div>
+  </div>
+
+  <div id="content" style="display: none;">
+    <!-- Portfolio Summary Cards -->
+    <div class="portfolio-summary">
+      <div class="summary-card">
+        <div class="card-label">Total Value</div>
+        <div class="card-value" id="total-value">N/A</div>
+      </div>
+      <div class="summary-card">
+        <div class="card-label">Cash</div>
+        <div class="card-value" id="cash">N/A</div>
+      </div>
+      <div class="summary-card">
+        <div class="card-label">Positions Value</div>
+        <div class="card-value" id="positions-value">N/A</div>
+      </div>
+      <div class="summary-card">
+        <div class="card-label">Open P/L</div>
+        <div class="card-value" id="open-pl">N/A</div>
+      </div>
+      <div class="summary-card">
+        <div class="card-label">Open P/L %</div>
+        <div class="card-value" id="open-pl-pct">N/A</div>
+      </div>
+    </div>
+
+    <!-- Positions Section -->
+    <div class="positions-section">
+      <h2>Open Positions</h2>
+      <div id="positions-content">
+        <!-- Positions will be rendered here -->
+      </div>
+    </div>
+
+    <!-- Trade Stats -->
+    <div class="trade-stats">
+      <div class="stat-card">
+        <div class="stat-label">Open Trades</div>
+        <div class="stat-value" id="num-open-trades">0</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Open Signals</div>
+        <div class="stat-value" id="num-open-signals">0</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="{{ url_for('static', path='portfolio.js') }}"></script>
+{% endblock %}
