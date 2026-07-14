@@ -1,28 +1,39 @@
-"""Frontend module for stock options dashboard.
+"""Frontend module for Options Tracker."""
 
-Provides:
-- API client for backend communication
-- App shell for layout and state management
-- Dashboard service for data aggregation
-- Portfolio summary component
-"""
+from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import HTMLResponse
+from fastapi.templating import Jinja2Templates
+from pathlib import Path
+import os
 
-from app.frontend.api_client import APIClient, get_api_client, APIError
-from app.frontend.app_shell import AppShell
-from app.frontend.portfolio_summary import (
-    PortfolioSummaryComponent,
-    format_currency,
-    format_percentage,
-    format_number,
-)
+# Get the directory where this file is located
+FRONTEND_DIR = Path(__file__).parent
+TEMPLATES_DIR = FRONTEND_DIR / "templates"
+STATIC_DIR = FRONTEND_DIR / "static"
 
-__all__ = [
-    "APIClient",
-    "get_api_client",
-    "APIError",
-    "AppShell",
-    "PortfolioSummaryComponent",
-    "format_currency",
-    "format_percentage",
-    "format_number",
-]
+# Initialize Jinja2 templates
+templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+
+
+def setup_frontend(app: FastAPI) -> None:
+    """Setup frontend routes and static file serving.
+    
+    Args:
+        app: FastAPI application instance
+    """
+    # Mount static files
+    if STATIC_DIR.exists():
+        app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+    
+    # Dashboard route
+    @app.get("/dashboard", response_class=HTMLResponse)
+    async def dashboard():
+        """Serve the dashboard page."""
+        return templates.get_template("dashboard.html").render()
+    
+    # Opportunities route
+    @app.get("/opportunities", response_class=HTMLResponse)
+    async def opportunities():
+        """Serve the opportunities page."""
+        return templates.get_template("opportunities.html").render()
