@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+
+{% block title %}Risk Settings - Options Tracker{% endblock %}
+
+{% block content %}
+<div class="risk-settings-container">
+  <div class="page-header">
+    <h1>Risk Settings</h1>
+    <button id="refreshBtn" class="btn btn-primary">Refresh</button>
+  </div>
+
+  <div id="loadingState" class="loading-state" style="display: none;">
+    <div class="spinner"></div>
+    <p>Loading risk settings...</p>
+  </div>
+
+  <div id="errorState" class="error-state" style="display: none;">
+    <div class="error-message"></div>
+    <button class="btn btn-secondary" onclick="loadRiskSettings()">Retry</button>
+  </div>
+
+  <div id="contentArea" style="display: none;">
+    <!-- Current Settings Section -->
+    <section class="risk-settings-section">
+      <h2>Current Settings</h2>
+      <div class="current-settings-grid">
+        <div class="setting-card">
+          <div class="setting-label">Risk Level</div>
+          <div id="currentRiskLevel" class="setting-value risk-level-badge">—</div>
+        </div>
+        <div class="setting-card">
+          <div class="setting-label">Paper Trading</div>
+          <div id="paperTradingStatus" class="setting-value">—</div>
+        </div>
+        <div class="setting-card">
+          <div class="setting-label">Live Trading</div>
+          <div id="liveTradingStatus" class="setting-value">—</div>
+        </div>
+        <div class="setting-card">
+          <div class="setting-label">Live Trading Approved</div>
+          <div id="liveApprovedStatus" class="setting-value">—</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Risk Level Selection Section -->
+    <section class="risk-settings-section">
+      <h2>Change Risk Level</h2>
+      <div class="risk-level-selector">
+        <div id="riskLevelButtons" class="risk-level-buttons">
+          <!-- Populated by JavaScript -->
+        </div>
+        <div id="confirmationPrompt" class="confirmation-prompt" style="display: none;">
+          <p id="confirmationMessage"></p>
+          <div class="confirmation-buttons">
+            <button id="confirmBtn" class="btn btn-danger">Confirm</button>
+            <button id="cancelBtn" class="btn btn-secondary">Cancel</button>
+          </div>
+        </div>
+        <div id="updateStatus" class="update-status" style="display: none;"></div>
+      </div>
+    </section>
+
+    <!-- Risk Level Details Section -->
+    <section class="risk-settings-section">
+      <h2>Risk Level Details</h2>
+      <div id="riskLevelDetails" class="risk-level-details">
+        <!-- Populated by JavaScript -->
+      </div>
+    </section>
+  </div>
+</div>
+
+<script src="{{ url_for('static', path='risk_settings.js') }}"></script>
+{% endblock %}
