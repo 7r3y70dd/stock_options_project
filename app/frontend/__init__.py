@@ -1,31 +1,30 @@
-"""Frontend assets, templates, and components."""
+"""Frontend module for stock options dashboard.
 
-from app.frontend.dashboard import (
-    Dashboard,
-    DashboardData,
-    PortfolioSummary,
-    WatchlistItem,
-    OpportunityItem,
-    TradeItem,
-    NewsItem,
-    RiskSettings,
-)
-from app.frontend.api_client import APIClient, APIError, get_api_client
+Provides:
+- API client for backend communication
+- App shell for layout and state management
+- Dashboard service for data aggregation
+- Portfolio summary component
+"""
+
+from app.frontend.api_client import APIClient, get_api_client, APIError
 from app.frontend.app_shell import AppShell, AppState, LoadingState
+from app.frontend.portfolio_summary import (
+    PortfolioSummaryComponent,
+    format_currency,
+    format_percentage,
+    format_number,
+)
 
 __all__ = [
-    "Dashboard",
-    "DashboardData",
-    "PortfolioSummary",
-    "WatchlistItem",
-    "OpportunityItem",
-    "TradeItem",
-    "NewsItem",
-    "RiskSettings",
     "APIClient",
-    "APIError",
     "get_api_client",
+    "APIError",
     "AppShell",
     "AppState",
     "LoadingState",
+    "PortfolioSummaryComponent",
+    "format_currency",
+    "format_percentage",
+    "format_number",
 ]

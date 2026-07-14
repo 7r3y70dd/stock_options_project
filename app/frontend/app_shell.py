@@ -186,15 +186,19 @@ class AppShell:
             return {"type": "portfolio", "data": None}
         
         portfolio = self.state.dashboard_data.get("portfolio_summary", {})
+        
+        # Import formatting utilities
+        from app.frontend.portfolio_summary import format_currency, format_percentage
+        
         return {
             "type": "portfolio",
             "title": "Portfolio Summary",
             "data": portfolio,
             "cards": [
-                {"label": "Total Value", "value": f"${portfolio.get('total_value', 0):.2f}"},
-                {"label": "Cash", "value": f"${portfolio.get('cash', 0):.2f}"},
-                {"label": "Positions", "value": f"${portfolio.get('positions_value', 0):.2f}"},
-                {"label": "Open P/L", "value": f"${portfolio.get('open_pl', 0):.2f} ({portfolio.get('open_pl_pct', 0):.2f}%)"},
+                {"label": "Total Value", "value": format_currency(portfolio.get('total_value', 0))},
+                {"label": "Cash", "value": format_currency(portfolio.get('cash', 0))},
+                {"label": "Positions", "value": format_currency(portfolio.get('positions_value', 0))},
+                {"label": "Open P/L", "value": f"{format_currency(portfolio.get('open_pl', 0))} ({format_percentage(portfolio.get('open_pl_pct', 0))})" },
                 {"label": "Open Trades", "value": str(portfolio.get('num_open_trades', 0))},
                 {"label": "Pending Signals", "value": str(portfolio.get('num_open_signals', 0))},
             ],
@@ -358,12 +362,11 @@ class AppShell:
         """Render complete app shell.
         
         Returns:
-            Complete app layout
+            Complete app shell component data
         """
         return {
             "type": "app-shell",
             "header": self.render_header(),
-            "main_content": self.render_main_content(),
             "status_area": self.render_status_area(),
-            "timestamp": self.state.dashboard_data.get("timestamp") if self.state.dashboard_data else None,
+            "main_content": self.render_main_content(),
         }
