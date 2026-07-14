@@ -356,6 +356,6 @@ def get_api_client(
         APIClient instance
     """
     global _api_client
-    if _api_client is None:
+    if _api_client is None or base_url is not None or dashboard_prefix is not None:
         _api_client = APIClient(base_url=base_url, dashboard_prefix=dashboard_prefix)
     return _api_client
