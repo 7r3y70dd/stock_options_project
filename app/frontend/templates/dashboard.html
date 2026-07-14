@@ -1,116 +1,80 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Options Tracker Dashboard</title>
-    <link rel="stylesheet" href="/static/dashboard.css">
-</head>
-<body>
-    <div class="dashboard-container">
-        <!-- Header -->
-        <header class="dashboard-header">
-            <h1>Options Tracker Dashboard</h1>
-            <div class="header-controls">
-                <button id="refreshBtn" class="btn btn-primary">Refresh</button>
-                <span id="lastRefreshed" class="last-refreshed">Loading...</span>
-            </div>
-        </header>
+{% extends "base.html" %}
 
-        <!-- Loading State -->
-        <div id="loadingState" class="loading-state hidden">
-            <div class="spinner"></div>
-            <p>Loading dashboard...</p>
-        </div>
+{% block title %}Dashboard - Options Tracker{% endblock %}
 
-        <!-- Error State -->
-        <div id="errorState" class="error-state hidden">
-            <div class="error-message">
-                <h3>Error Loading Dashboard</h3>
-                <p id="errorMessage"></p>
-                <button id="retryBtn" class="btn btn-secondary">Retry</button>
-            </div>
-        </div>
+{% block extra_css %}
+<link rel="stylesheet" href="{{ url_for('static', path='dashboard.css') }}">
+{% endblock %}
 
-        <!-- Main Content -->
-        <main id="mainContent" class="main-content hidden">
-            <!-- Portfolio Summary Section -->
-            <section class="section portfolio-section">
-                <h2>Portfolio Summary</h2>
-                <div class="portfolio-cards">
-                    <div class="card">
-                        <div class="card-label">Total Value</div>
-                        <div class="card-value" id="totalValue">-</div>
-                    </div>
-                    <div class="card">
-                        <div class="card-label">Cash</div>
-                        <div class="card-value" id="cash">-</div>
-                    </div>
-                    <div class="card">
-                        <div class="card-label">Positions Value</div>
-                        <div class="card-value" id="positionsValue">-</div>
-                    </div>
-                    <div class="card">
-                        <div class="card-label">Open P/L</div>
-                        <div class="card-value" id="openPL">-</div>
-                    </div>
-                    <div class="card">
-                        <div class="card-label">Open P/L %</div>
-                        <div class="card-value" id="openPLPct">-</div>
-                    </div>
-                    <div class="card">
-                        <div class="card-label">Open Trades</div>
-                        <div class="card-value" id="numOpenTrades">-</div>
-                    </div>
-                    <div class="card">
-                        <div class="card-label">Pending Signals</div>
-                        <div class="card-value" id="numOpenSignals">-</div>
-                    </div>
-                </div>
-            </section>
-
-            <!-- Top Opportunities Section -->
-            <section class="section opportunities-section">
-                <h2>Top Opportunities</h2>
-                <div id="opportunitiesContainer" class="opportunities-container">
-                    <!-- Populated by JavaScript -->
-                </div>
-            </section>
-
-            <!-- Watchlist Section -->
-            <section class="section watchlist-section">
-                <h2>Watchlist</h2>
-                <div id="watchlistContainer" class="watchlist-container">
-                    <!-- Populated by JavaScript -->
-                </div>
-            </section>
-
-            <!-- Open Trades Section -->
-            <section class="section trades-section">
-                <h2>Open Trades</h2>
-                <div id="tradesContainer" class="trades-container">
-                    <!-- Populated by JavaScript -->
-                </div>
-            </section>
-
-            <!-- Recent News Section -->
-            <section class="section news-section">
-                <h2>Recent News</h2>
-                <div id="newsContainer" class="news-container">
-                    <!-- Populated by JavaScript -->
-                </div>
-            </section>
-
-            <!-- Risk Settings Section -->
-            <section class="section risk-section">
-                <h2>Risk Settings</h2>
-                <div id="riskContainer" class="risk-container">
-                    <!-- Populated by JavaScript -->
-                </div>
-            </section>
-        </main>
+{% block content %}
+<div class="dashboard-container">
+    <div class="dashboard-header">
+        <h2>Dashboard</h2>
+        <button class="btn btn-primary btn-small" onclick="refreshDashboard()">Refresh</button>
     </div>
 
-    <script src="/static/dashboard.js"></script>
-</body>
-</html>
+    <!-- Portfolio Summary Section -->
+    <section id="portfolio-section" class="dashboard-section">
+        <h3 class="section-title">Portfolio Summary</h3>
+        <div id="portfolio-cards" class="portfolio-cards">
+            <div class="empty-state">
+                <p class="empty-state-text">Loading portfolio data...</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Top Opportunities Section -->
+    <section id="opportunities-section" class="dashboard-section">
+        <h3 class="section-title">Top Opportunities</h3>
+        <div id="opportunities-container" class="opportunities-container">
+            <div class="empty-state">
+                <p class="empty-state-text">Loading opportunities...</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Watchlist Section -->
+    <section id="watchlist-section" class="dashboard-section">
+        <h3 class="section-title">Watchlist</h3>
+        <div id="watchlist-container" class="watchlist-container">
+            <div class="empty-state">
+                <p class="empty-state-text">Loading watchlist...</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Open Trades Section -->
+    <section id="trades-section" class="dashboard-section">
+        <h3 class="section-title">Open Trades</h3>
+        <div id="trades-container" class="trades-container">
+            <div class="empty-state">
+                <p class="empty-state-text">Loading trades...</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Recent News Section -->
+    <section id="news-section" class="dashboard-section">
+        <h3 class="section-title">Recent News</h3>
+        <div id="news-container" class="news-container">
+            <div class="empty-state">
+                <p class="empty-state-text">Loading news...</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Risk Settings Section -->
+    <section id="risk-section" class="dashboard-section">
+        <h3 class="section-title">Risk Settings</h3>
+        <div id="risk-container" class="risk-container">
+            <div class="empty-state">
+                <p class="empty-state-text">Loading risk settings...</p>
+            </div>
+        </div>
+    </section>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="{{ url_for('static', path='dashboard.js') }}"></script>
+{% endblock %}
