@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Options Tracker{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', path='app.css') }}">
+    {% block extra_css %}{% endblock %}
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="app-header">
+            <div class="header-content">
+                <h1 class="app-title">Options Tracker</h1>
+                <nav class="app-nav">
+                    <ul class="nav-list">
+                        <li><a href="/dashboard" class="nav-link">Dashboard</a></li>
+                        <li><a href="/opportunities" class="nav-link">Opportunities</a></li>
+                        <li><a href="/portfolio" class="nav-link">Portfolio</a></li>
+                        <li><a href="/watchlist" class="nav-link">Watchlist</a></li>
+                        <li><a href="/trades" class="nav-link">Trades</a></li>
+                        <li><a href="/risk-settings" class="nav-link">Risk Settings</a></li>
+                        <li><a href="/news" class="nav-link">News</a></li>
+                        <li><a href="/status" class="nav-link">Status</a></li>
+                    </ul>
+                </nav>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="app-main">
+            {% block content %}{% endblock %}
+        </main>
+
+        <!-- Footer -->
+        <footer class="app-footer">
+            <div class="footer-content">
+                <p class="footer-text">Options Tracker &copy; 2026</p>
+                <div class="footer-status" id="footer-status"></div>
+            </div>
+        </footer>
+    </div>
+
+    <!-- Shared Loading State -->
+    <div id="loading-overlay" class="loading-overlay hidden">
+        <div class="loading-spinner">
+            <div class="spinner"></div>
+            <p>Loading...</p>
+        </div>
+    </div>
+
+    <!-- Shared Error State -->
+    <div id="error-toast" class="error-toast hidden">
+        <div class="error-content">
+            <span class="error-message" id="error-message"></span>
+            <button class="error-close" onclick="document.getElementById('error-toast').classList.add('hidden')">&times;</button>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', path='formatters.js') }}"></script>
+    <script src="{{ url_for('static', path='app.js') }}"></script>
+    {% block extra_js %}{% endblock %}
+</body>
+</html>
