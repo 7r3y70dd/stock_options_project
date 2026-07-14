@@ -231,8 +231,17 @@ class TestAlphaVantageProvider:
             provider = AlphaVantageProvider(api_key='test-key')
             assert isinstance(provider, DataProvider)
 
-    def test_alpha_vantage_requires_api_key(self):
+    def test_alpha_vantage_requires_api_key(self, monkeypatch):
         """Test that AlphaVantageProvider requires API key."""
+        monkeypatch.delenv("ALPHAVANTAGE_API_KEY", raising=False)
+        monkeypatch.delenv("ALPHA_VANTAGE_API_KEY", raising=False)
+
+        # AlphaVantageProvider reads from the already-loaded config object,
+        # so clear that too; deleting os.environ is not enough after import.
+        from app.data_sources import alpha_vantage_provider as av_module
+
+        monkeypatch.setattr(av_module.config, "alphavantage_api_key", None)
+
         with pytest.raises(ValueError, match="API key not provided"):
             AlphaVantageProvider(api_key=None)
 

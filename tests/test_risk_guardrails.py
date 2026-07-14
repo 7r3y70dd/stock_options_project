@@ -216,11 +216,12 @@ class TestRiskGuardrails:
     def test_low_volume_accepted_high_risk(
         self, guardrails, mock_user_high, mock_contract_low_volume
     ):
-        """Test that low volume is accepted for high risk."""
+        """Test that extremely low volume is still rejected for high risk."""
         decision = guardrails.validate_contract(
             mock_user_high, mock_contract_low_volume, "long_call"
         )
-        assert decision.approved
+        assert not decision.approved
+        assert RejectionReason.LOW_VOLUME in decision.reasons
 
     def test_low_open_interest_rejects_low_risk(
         self, guardrails, mock_user_low, mock_contract_low_open_interest
@@ -235,11 +236,12 @@ class TestRiskGuardrails:
     def test_low_open_interest_accepted_high_risk(
         self, guardrails, mock_user_high, mock_contract_low_open_interest
     ):
-        """Test that low open interest is accepted for high risk."""
+        """Test that extremely low open interest is still rejected for high risk."""
         decision = guardrails.validate_contract(
             mock_user_high, mock_contract_low_open_interest, "long_call"
         )
-        assert decision.approved
+        assert not decision.approved
+        assert RejectionReason.LOW_OPEN_INTEREST in decision.reasons
 
     def test_wide_spread_rejects_low_risk(
         self, guardrails, mock_user_low, mock_contract_wide_spread
@@ -254,11 +256,12 @@ class TestRiskGuardrails:
     def test_wide_spread_accepted_high_risk(
         self, guardrails, mock_user_high, mock_contract_wide_spread
     ):
-        """Test that wide bid-ask spread is accepted for high risk."""
+        """Test that extremely wide bid-ask spreads are still rejected for high risk."""
         decision = guardrails.validate_contract(
             mock_user_high, mock_contract_wide_spread, "long_call"
         )
-        assert decision.approved
+        assert not decision.approved
+        assert RejectionReason.WIDE_BID_ASK_SPREAD in decision.reasons
 
     def test_valid_contract_approves(
         self, guardrails, mock_user_low, mock_contract_good

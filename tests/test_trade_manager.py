@@ -362,8 +362,6 @@ class TestCloseTrade:
         )
         
         # P/L = (4.50 - 3.70) * 1 * 100 = 80
-        expected_pnl = (4.50 - 3.70) * 1 * 100
-        assert closed_trade.realized_pnl == expected_pnl
         assert closed_trade.realized_pnl == 80.0
 
     def test_close_trade_with_loss(
@@ -390,8 +388,6 @@ class TestCloseTrade:
         )
         
         # P/L = (2.50 - 3.70) * 1 * 100 = -120
-        expected_pnl = (2.50 - 3.70) * 1 * 100
-        assert closed_trade.realized_pnl == expected_pnl
         assert closed_trade.realized_pnl == -120.0
 
     def test_close_trade_with_multiple_quantity(
@@ -417,8 +413,6 @@ class TestCloseTrade:
         )
         
         # P/L = (4.50 - 3.70) * 3 * 100 = 240
-        expected_pnl = (4.50 - 3.70) * 3 * 100
-        assert closed_trade.realized_pnl == expected_pnl
         assert closed_trade.realized_pnl == 240.0
 
     def test_close_trade_updates_status(

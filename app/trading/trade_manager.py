@@ -236,7 +236,12 @@ class TradeManager:
             # Calculate approximate realized P/L
             # For options: (exit_price - entry_price) * quantity * 100
             # (multiplier of 100 for standard option contract)
-            realized_pnl = (exit_price - trade.entry_price) * trade.quantity * 100
+            realized_pnl = round(
+                (float(exit_price) - float(trade.entry_price))
+                * int(trade.quantity)
+                * 100,
+                2,
+            )
             
             # Set exit fields
             trade.status = "closed"
