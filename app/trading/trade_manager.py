@@ -11,6 +11,7 @@ from typing import Optional, List
 from sqlalchemy.orm import Session
 
 from app.models.database import Signal, Trade, OptionContract, User
+from app.risk.guardrails import RiskGuardrails, RiskDecision
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +24,12 @@ class TradeManager:
     - Validating signal ownership and status
     - Calculating entry prices from option contracts
     - Managing trade closure and P/L calculation
+    - Enforcing risk guardrails before trade approval
     """
+
+    def __init__(self):
+        """Initialize trade manager with risk guardrails."""
+        self.guardrails = RiskGuardrails()
 
     def approve_signal_as_paper_trade(
         self,
@@ -35,7 +41,8 @@ class TradeManager:
         """Approve a pending signal as a paper trade.
         
         Converts a pending signal into an open paper trade with entry price
-        calculated from the option contract mid-price.
+        calculated from the option contract mid-price. Validates signal and
+        enforces risk guardrails before approval.
         
         Args:
             user_id: User ID (must match signal owner)
@@ -48,7 +55,7 @@ class TradeManager:
             
         Raises:
             ValueError: If signal not found, belongs to different user, already traded,
-                       or has no option contract
+                       has no option contract, or fails risk validation
         """
         try:
             # Load the signal
@@ -87,6 +94,27 @@ class TradeManager:
             if not contract:
                 raise ValueError(
                     f"Option contract {signal.option_contract_id} not found"
+                )
+            
+            # Load user for risk validation
+            user = db.query(User).filter(User.id == user_id).first()
+            if not user:
+                raise ValueError(f"User {user_id} not found")
+            
+            # Validate against risk guardrails
+            risk_decision = self.guardrails.validate_signal(
+                user, signal, contract
+            )
+            if not risk_decision.approved:
+                raise ValueError(
+                    f"Signal {signal_id} failed risk validation: "
+                    f"{'; '.join(risk_decision.messages)}"
+                )
+            
+            # Check kill switch
+            if self.guardrails.is_kill_switch_active(db):
+                raise ValueError(
+                    f"Cannot approve signal {signal_id}: kill switch is active"
                 )
             
             # Calculate entry price from option contract mid price
