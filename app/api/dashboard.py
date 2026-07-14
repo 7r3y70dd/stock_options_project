@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.frontend.dashboard import Dashboard, DashboardData, SignalDetail
+from app.trading.trade_manager import TradeManager
 
 logger = logging.getLogger(__name__)
 
@@ -15,6 +16,7 @@ router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 
 # Initialize dashboard service
 _dashboard: Optional[Dashboard] = None
+_trade_manager: Optional[TradeManager] = None
 
 
 def get_dashboard() -> Dashboard:
@@ -27,6 +29,18 @@ def get_dashboard() -> Dashboard:
     if _dashboard is None:
         _dashboard = Dashboard()
     return _dashboard
+
+
+def get_trade_manager() -> TradeManager:
+    """Get or initialize trade manager service.
+    
+    Returns:
+        TradeManager instance
+    """
+    global _trade_manager
+    if _trade_manager is None:
+        _trade_manager = TradeManager()
+    return _trade_manager
 
 
 @router.get("/", response_model=dict)
@@ -340,82 +354,165 @@ async def get_top_opportunities(
             "count": len(opportunities),
         }
     except Exception as e:
-        logger.error(f"Error getting top opportunities for user {user_id}: {e}", exc_info=True)
+        logger.error(f"Error getting opportunities for user {user_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to retrieve opportunities")
 
 
-@router.get("/risk-settings", response_model=dict)
-async def get_risk_settings(
+@router.post("/trades/paper/approve", response_model=dict)
+async def approve_signal_as_paper_trade(
+    user_id: int = Query(..., description="User ID"),
+    signal_id: int = Query(..., description="Signal ID to approve"),
+    quantity: int = Query(1, description="Number of contracts"),
+    db: Session = Depends(get_db),
+    trade_manager: TradeManager = Depends(get_trade_manager),
+) -> dict:
+    """Approve a pending signal as a paper trade.
+    
+    Converts a pending signal into an open paper trade with entry price
+    calculated from the option contract mid-price.
+    
+    Args:
+        user_id: User ID
+        signal_id: Signal ID to approve
+        quantity: Number of contracts (default 1)
+        db: Database session
+        trade_manager: TradeManager service
+        
+    Returns:
+        Success response with created trade details
+        
+    Raises:
+        HTTPException: If validation fails or error occurs
+    """
+    try:
+        trade = trade_manager.approve_signal_as_paper_trade(
+            user_id=user_id,
+            signal_id=signal_id,
+            db=db,
+            quantity=quantity,
+        )
+        
+        # Get symbol from option contract
+        symbol = trade.option_contract.symbol if trade.option_contract else "UNKNOWN"
+        
+        return {
+            "status": "success",
+            "message": "Signal approved as paper trade",
+            "trade": {
+                "trade_id": trade.id,
+                "signal_id": trade.signal_id,
+                "symbol": symbol,
+                "strategy_type": trade.signal.strategy_type if trade.signal else "unknown",
+                "entry_price": trade.entry_price,
+                "quantity": trade.quantity,
+                "status": trade.status,
+                "is_paper_trading": trade.is_paper_trading,
+                "opened_at": trade.opened_at.isoformat(),
+            },
+        }
+    except ValueError as e:
+        logger.warning(f"Validation error approving signal {signal_id}: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(
+            f"Error approving signal {signal_id} as paper trade: {e}",
+            exc_info=True,
+        )
+        raise HTTPException(status_code=500, detail="Failed to approve signal as paper trade")
+
+
+@router.get("/trades/open", response_model=dict)
+async def get_open_trades(
     user_id: int = Query(..., description="User ID"),
     db: Session = Depends(get_db),
-    dashboard: Dashboard = Depends(get_dashboard),
+    trade_manager: TradeManager = Depends(get_trade_manager),
 ) -> dict:
-    """Get user's risk settings with available options.
+    """Get all open trades for a user.
     
     Args:
         user_id: User ID
         db: Database session
-        dashboard: Dashboard service
+        trade_manager: TradeManager service
         
     Returns:
-        Risk settings with available risk levels
+        List of open trades
     """
     try:
-        settings = dashboard.get_risk_settings(user_id, db)
+        trades = trade_manager.get_open_trades(user_id, db)
         return {
-            "risk_level": settings.risk_level,
-            "paper_trading_enabled": settings.paper_trading_enabled,
-            "live_trading_enabled": settings.live_trading_enabled,
-            "live_trading_approved": settings.live_trading_approved,
-            "risk_levels_info": [
+            "trades": [
                 {
-                    "level": info.level,
-                    "description": info.description,
-                    "max_position_size_pct": info.max_position_size_pct,
-                    "allowed_strategies": info.allowed_strategies,
-                    "max_loss_per_trade_pct": info.max_loss_per_trade_pct,
-                    "requires_confirmation": info.requires_confirmation,
+                    "trade_id": trade.id,
+                    "signal_id": trade.signal_id,
+                    "symbol": trade.option_contract.symbol if trade.option_contract else "UNKNOWN",
+                    "strategy_type": trade.signal.strategy_type if trade.signal else "unknown",
+                    "entry_price": trade.entry_price,
+                    "quantity": trade.quantity,
+                    "status": trade.status,
+                    "is_paper_trading": trade.is_paper_trading,
+                    "opened_at": trade.opened_at.isoformat(),
                 }
-                for info in settings.risk_levels_info
+                for trade in trades
             ],
+            "count": len(trades),
         }
     except Exception as e:
-        logger.error(f"Error getting risk settings for user {user_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to retrieve risk settings")
+        logger.error(f"Error getting open trades for user {user_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to retrieve open trades")
 
 
-@router.post("/risk-settings/update", response_model=dict)
-async def update_risk_settings(
+@router.post("/trades/{trade_id}/close", response_model=dict)
+async def close_trade(
+    trade_id: int,
     user_id: int = Query(..., description="User ID"),
-    risk_level: str = Query(..., description="New risk level (low, medium, high)"),
-    confirmed: bool = Query(False, description="Whether user confirmed high-risk selection"),
+    exit_price: float = Query(..., description="Exit price"),
+    exit_reason: str = Query("manual", description="Reason for closing"),
     db: Session = Depends(get_db),
-    dashboard: Dashboard = Depends(get_dashboard),
+    trade_manager: TradeManager = Depends(get_trade_manager),
 ) -> dict:
-    """Update user's risk level.
+    """Close an open trade.
     
     Args:
+        trade_id: Trade ID to close
         user_id: User ID
-        risk_level: New risk level ("low", "medium", "high")
-        confirmed: Whether user confirmed high-risk selection
+        exit_price: Price at which to exit
+        exit_reason: Reason for closing
         db: Database session
-        dashboard: Dashboard service
+        trade_manager: TradeManager service
         
     Returns:
-        Result of update operation
+        Closed trade details with realized P/L
+        
+    Raises:
+        HTTPException: If validation fails or error occurs
     """
     try:
-        result = dashboard.update_risk_level(user_id, risk_level, db, confirmed)
+        trade = trade_manager.close_trade(
+            user_id=user_id,
+            trade_id=trade_id,
+            db=db,
+            exit_price=exit_price,
+            exit_reason=exit_reason,
+        )
         
-        if result["status"] == "error":
-            raise HTTPException(status_code=400, detail=result["message"])
-        elif result["status"] == "confirmation_required":
-            # Return 202 Accepted with confirmation details
-            return result
-        
-        return result
-    except HTTPException:
-        raise
+        return {
+            "status": "success",
+            "message": "Trade closed successfully",
+            "trade": {
+                "trade_id": trade.id,
+                "signal_id": trade.signal_id,
+                "symbol": trade.option_contract.symbol if trade.option_contract else "UNKNOWN",
+                "entry_price": trade.entry_price,
+                "exit_price": trade.exit_price,
+                "quantity": trade.quantity,
+                "realized_pnl": trade.realized_pnl,
+                "status": trade.status,
+                "closed_at": trade.closed_at.isoformat() if trade.closed_at else None,
+            },
+        }
+    except ValueError as e:
+        logger.warning(f"Validation error closing trade {trade_id}: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.error(f"Error updating risk level for user {user_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to update risk level")
+        logger.error(f"Error closing trade {trade_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to close trade")
