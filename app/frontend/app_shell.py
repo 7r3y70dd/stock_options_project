@@ -176,6 +176,163 @@ class AppShell:
         else:
             return {"type": "none"}  # No status area needed
 
+    def render_portfolio_section(self) -> Dict[str, Any]:
+        """Render portfolio summary section.
+        
+        Returns:
+            Portfolio section component data
+        """
+        if not self.state.dashboard_data or "portfolio_summary" not in self.state.dashboard_data:
+            return {"type": "portfolio", "data": None}
+        
+        portfolio = self.state.dashboard_data.get("portfolio_summary", {})
+        return {
+            "type": "portfolio",
+            "title": "Portfolio Summary",
+            "data": portfolio,
+            "cards": [
+                {"label": "Total Value", "value": f"${portfolio.get('total_value', 0):.2f}"},
+                {"label": "Cash", "value": f"${portfolio.get('cash', 0):.2f}"},
+                {"label": "Positions", "value": f"${portfolio.get('positions_value', 0):.2f}"},
+                {"label": "Open P/L", "value": f"${portfolio.get('open_pl', 0):.2f} ({portfolio.get('open_pl_pct', 0):.2f}%)"},
+                {"label": "Open Trades", "value": str(portfolio.get('num_open_trades', 0))},
+                {"label": "Pending Signals", "value": str(portfolio.get('num_open_signals', 0))},
+            ],
+        }
+
+    def render_watchlist_section(self) -> Dict[str, Any]:
+        """Render watchlist preview section.
+        
+        Returns:
+            Watchlist section component data
+        """
+        if not self.state.dashboard_data or "watchlist" not in self.state.dashboard_data:
+            return {"type": "watchlist", "data": None, "items": []}
+        
+        watchlist = self.state.dashboard_data.get("watchlist", [])
+        return {
+            "type": "watchlist",
+            "title": "Watchlist",
+            "count": len(watchlist),
+            "items": [
+                {
+                    "symbol": item.get("symbol"),
+                    "price": item.get("current_price"),
+                    "added_at": item.get("added_at"),
+                }
+                for item in watchlist[:5]  # Show top 5
+            ],
+            "has_more": len(watchlist) > 5,
+        }
+
+    def render_opportunities_section(self) -> Dict[str, Any]:
+        """Render top opportunities section.
+        
+        Returns:
+            Opportunities section component data
+        """
+        if not self.state.dashboard_data or "top_opportunities" not in self.state.dashboard_data:
+            return {"type": "opportunities", "data": None, "items": []}
+        
+        opportunities = self.state.dashboard_data.get("top_opportunities", [])
+        return {
+            "type": "opportunities",
+            "title": "Top Opportunities",
+            "count": len(opportunities),
+            "items": [
+                {
+                    "signal_id": item.get("signal_id"),
+                    "symbol": item.get("symbol"),
+                    "strategy": item.get("strategy_type"),
+                    "score": item.get("score"),
+                    "expected_profit": item.get("expected_profit"),
+                    "max_loss": item.get("max_loss"),
+                    "probability": item.get("probability_estimate"),
+                }
+                for item in opportunities[:5]  # Show top 5
+            ],
+            "has_more": len(opportunities) > 5,
+        }
+
+    def render_trades_section(self) -> Dict[str, Any]:
+        """Render open trades section.
+        
+        Returns:
+            Trades section component data
+        """
+        if not self.state.dashboard_data or "open_trades" not in self.state.dashboard_data:
+            return {"type": "trades", "data": None, "items": []}
+        
+        trades = self.state.dashboard_data.get("open_trades", [])
+        return {
+            "type": "trades",
+            "title": "Open Trades",
+            "count": len(trades),
+            "items": [
+                {
+                    "trade_id": item.get("trade_id"),
+                    "symbol": item.get("symbol"),
+                    "strategy": item.get("strategy_type"),
+                    "entry_price": item.get("entry_price"),
+                    "current_price": item.get("current_price"),
+                    "quantity": item.get("quantity"),
+                    "pl": item.get("current_pl"),
+                    "pl_pct": item.get("current_pl_pct"),
+                }
+                for item in trades[:5]  # Show top 5
+            ],
+            "has_more": len(trades) > 5,
+        }
+
+    def render_news_section(self) -> Dict[str, Any]:
+        """Render recent news section.
+        
+        Returns:
+            News section component data
+        """
+        if not self.state.dashboard_data or "recent_news" not in self.state.dashboard_data:
+            return {"type": "news", "data": None, "items": []}
+        
+        news = self.state.dashboard_data.get("recent_news", [])
+        return {
+            "type": "news",
+            "title": "Recent News",
+            "count": len(news),
+            "items": [
+                {
+                    "article_id": item.get("article_id"),
+                    "symbol": item.get("symbol"),
+                    "title": item.get("title"),
+                    "source": item.get("source"),
+                    "sentiment": item.get("sentiment"),
+                    "published_at": item.get("published_at"),
+                }
+                for item in news[:5]  # Show top 5
+            ],
+            "has_more": len(news) > 5,
+        }
+
+    def render_risk_settings_section(self) -> Dict[str, Any]:
+        """Render risk settings section.
+        
+        Returns:
+            Risk settings section component data
+        """
+        if not self.state.dashboard_data or "risk_settings" not in self.state.dashboard_data:
+            return {"type": "risk-settings", "data": None}
+        
+        risk_settings = self.state.dashboard_data.get("risk_settings", {})
+        return {
+            "type": "risk-settings",
+            "title": "Risk Settings",
+            "data": {
+                "risk_level": risk_settings.get("risk_level"),
+                "paper_trading_enabled": risk_settings.get("paper_trading_enabled"),
+                "live_trading_enabled": risk_settings.get("live_trading_enabled"),
+                "live_trading_approved": risk_settings.get("live_trading_approved"),
+            },
+        }
+
     def render_main_content(self) -> Dict[str, Any]:
         """Render main content area.
         
@@ -186,10 +343,12 @@ class AppShell:
             return {
                 "type": "dashboard",
                 "sections": [
-                    {"type": "portfolio", "data": self.state.dashboard_data.get("portfolio_summary")},
-                    {"type": "watchlist", "data": self.state.dashboard_data.get("watchlist")},
-                    {"type": "opportunities", "data": self.state.dashboard_data.get("opportunities")},
-                    {"type": "risk-settings", "data": self.state.dashboard_data.get("risk_settings")},
+                    self.render_portfolio_section(),
+                    self.render_watchlist_section(),
+                    self.render_opportunities_section(),
+                    self.render_trades_section(),
+                    self.render_news_section(),
+                    self.render_risk_settings_section(),
                 ],
             }
         else:
@@ -206,4 +365,5 @@ class AppShell:
             "header": self.render_header(),
             "main_content": self.render_main_content(),
             "status_area": self.render_status_area(),
+            "timestamp": self.state.dashboard_data.get("timestamp") if self.state.dashboard_data else None,
         }
