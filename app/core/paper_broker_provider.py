@@ -630,3 +630,81 @@ class PaperBrokerProvider(BrokerProvider):
         )
         
         return orders
+
+    def get_portfolio(self, user_id: int | None = None, db=None) -> dict:
+        """Return a simple paper portfolio summary.
+
+        This is intentionally local/dev-safe. It does not call a live broker.
+        If a DB session and user_id are provided, it uses the user's initial
+        portfolio value and open paper trades. If not, it returns a safe
+        default portfolio.
+        """
+        initial_value = 10000.0
+
+        if db is None or user_id is None:
+            return {
+                "total_value": initial_value,
+                "cash": initial_value,
+                "positions_value": 0.0,
+                "open_pl": 0.0,
+                "open_pl_pct": 0.0,
+            }
+
+        from app.models.database import User, Trade, OptionContract
+
+        user = db.query(User).filter(User.id == user_id).first()
+        if user and getattr(user, "initial_portfolio_value", None):
+            initial_value = float(user.initial_portfolio_value)
+
+        open_trades = (
+            db.query(Trade)
+            .filter(Trade.user_id == user_id, Trade.status == "open")
+            .all()
+        )
+
+        entry_cost = 0.0
+        positions_value = 0.0
+        open_pl = 0.0
+
+        for trade in open_trades:
+            quantity = int(getattr(trade, "quantity", 0) or 0)
+            entry_price = float(getattr(trade, "entry_price", 0.0) or 0.0)
+
+            current_price = entry_price
+
+            contract_id = getattr(trade, "option_contract_id", None)
+            if contract_id:
+                contract = (
+                    db.query(OptionContract)
+                    .filter(OptionContract.id == contract_id)
+                    .first()
+                )
+
+                if contract:
+                    last = float(getattr(contract, "last", 0.0) or 0.0)
+                    bid = float(getattr(contract, "bid", 0.0) or 0.0)
+                    ask = float(getattr(contract, "ask", 0.0) or 0.0)
+
+                    if last > 0:
+                        current_price = last
+                    elif bid > 0 and ask > 0:
+                        current_price = (bid + ask) / 2
+
+            trade_entry_cost = entry_price * quantity * 100
+            trade_current_value = current_price * quantity * 100
+
+            entry_cost += trade_entry_cost
+            positions_value += trade_current_value
+            open_pl += trade_current_value - trade_entry_cost
+
+        cash = initial_value - entry_cost
+        total_value = cash + positions_value
+        open_pl_pct = (open_pl / initial_value * 100) if initial_value > 0 else 0.0
+
+        return {
+            "total_value": round(total_value, 2),
+            "cash": round(cash, 2),
+            "positions_value": round(positions_value, 2),
+            "open_pl": round(open_pl, 2),
+            "open_pl_pct": round(open_pl_pct, 4),
+        }

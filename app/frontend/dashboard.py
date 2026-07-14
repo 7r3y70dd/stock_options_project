@@ -256,7 +256,7 @@ class Dashboard:
                 )
 
             # Get portfolio from broker
-            portfolio = self.broker_provider.get_portfolio()
+            portfolio = self.broker_provider.get_portfolio(user_id=user_id, db=db)
 
             # Count open trades and signals
             open_trades = db.query(Trade).filter(
@@ -645,17 +645,54 @@ class Dashboard:
             
             items = []
             for trade in trades:
+                signal = None
+                contract = None
+
+                if getattr(trade, "signal_id", None):
+                    signal = (
+                        db.query(Signal)
+                        .filter(Signal.id == trade.signal_id)
+                        .first()
+                    )
+
+                if getattr(trade, "option_contract_id", None):
+                    contract = (
+                        db.query(OptionContract)
+                        .filter(OptionContract.id == trade.option_contract_id)
+                        .first()
+                    )
+
+                if signal and getattr(signal, "symbol", None):
+                    symbol = signal.symbol
+                elif contract and getattr(contract, "symbol", None):
+                    symbol = contract.symbol
+                else:
+                    symbol = "UNKNOWN"
+
+                strategy_type = (
+                    signal.strategy_type
+                    if signal and getattr(signal, "strategy_type", None)
+                    else "unknown"
+                )
+
+                entry_date = (
+                    getattr(trade, "entry_date", None)
+                    or getattr(trade, "opened_at", None)
+                    or getattr(trade, "created_at", None)
+                    or datetime.utcnow()
+                )
+
                 items.append(
                     TradeItem(
                         trade_id=trade.id,
-                        symbol=trade.symbol,
-                        strategy_type=trade.strategy_type,
-                        entry_price=trade.entry_price,
+                        symbol=symbol,
+                        strategy_type=strategy_type,
+                        entry_price=float(trade.entry_price or 0.0),
                         current_price=None,  # Would fetch from data provider
-                        quantity=trade.quantity,
-                        entry_date=trade.entry_date,
-                        current_pl=None,  # Would calculate
-                        current_pl_pct=None,  # Would calculate
+                        quantity=int(trade.quantity or 0),
+                        entry_date=entry_date,
+                        current_pl=None,  # Would calculate later
+                        current_pl_pct=None,  # Would calculate later
                         status=trade.status,
                     )
                 )

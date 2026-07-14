@@ -421,6 +421,76 @@ async def approve_signal_as_paper_trade(
         raise HTTPException(status_code=500, detail="Failed to approve signal as paper trade")
 
 
+@router.post("/signals/{signal_id}/paper-trade", response_model=dict)
+async def approve_signal_as_paper_trade(
+    signal_id: int,
+    user_id: int,
+    quantity: int = 1,
+    db: Session = Depends(get_db),
+):
+    """Approve a pending signal as a paper trade."""
+    try:
+        from app.trading.trade_manager import TradeManager
+        from app.models.database import Signal, OptionContract
+
+        trade = TradeManager().approve_signal_as_paper_trade(
+            user_id=user_id,
+            signal_id=signal_id,
+            db=db,
+            quantity=quantity,
+        )
+
+        signal = db.query(Signal).filter(Signal.id == trade.signal_id).first()
+        contract = None
+        if getattr(trade, "option_contract_id", None):
+            contract = (
+                db.query(OptionContract)
+                .filter(OptionContract.id == trade.option_contract_id)
+                .first()
+            )
+
+        symbol = None
+        strategy_type = None
+
+        if signal:
+            symbol = signal.symbol
+            strategy_type = signal.strategy_type
+
+        if not symbol and contract:
+            symbol = contract.symbol
+
+        return {
+            "status": "success",
+            "message": "Signal approved as paper trade",
+            "trade": {
+                "trade_id": trade.id,
+                "signal_id": trade.signal_id,
+                "option_contract_id": getattr(trade, "option_contract_id", None),
+                "symbol": symbol,
+                "strategy_type": strategy_type,
+                "entry_price": trade.entry_price,
+                "quantity": trade.quantity,
+                "status": trade.status,
+                "order_status": getattr(trade, "order_status", None),
+                "is_paper_trading": getattr(trade, "is_paper_trading", True),
+                "opened_at": (
+                    trade.opened_at.isoformat()
+                    if getattr(trade, "opened_at", None)
+                    else None
+                ),
+            },
+        }
+
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to approve signal as paper trade: {e}",
+        )
+
+
 @router.get("/trades/open", response_model=dict)
 async def get_open_trades(
     user_id: int = Query(..., description="User ID"),

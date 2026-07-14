@@ -299,3 +299,23 @@ def render_dashboard(
     except Exception as e:
         logger.error(f"Error rendering dashboard: {e}", exc_info=True)
         return f"Dashboard: Error rendering - {e}"
+
+
+class AppShell:
+    """Compatibility wrapper for Python-side frontend scaffold."""
+
+    def __init__(self, api_client=None, user_id: int = 1):
+        self.api_client = api_client
+        self.user_id = user_id
+
+    def render_dashboard(self, dashboard_data):
+        return render_dashboard(dashboard_data)
+
+    def get_dashboard(self):
+        if self.api_client is None:
+            raise ValueError("AppShell has no api_client configured")
+
+        if hasattr(self.api_client, "get_dashboard"):
+            return self.api_client.get_dashboard(self.user_id)
+
+        raise AttributeError("api_client does not implement get_dashboard")
