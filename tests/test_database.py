@@ -21,16 +21,17 @@ from app.models.database import (
 
 @pytest.fixture
 def db_session() -> Session:
-    """Create a test database session."""
-    # Create tables
-    Base.metadata.create_all(bind=engine)
-    
-    session = SessionLocal()
-    yield session
-    
-    # Cleanup
-    session.close()
+    """Create a clean test database session."""
     Base.metadata.drop_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
+
+    session = SessionLocal()
+    try:
+        yield session
+        session.rollback()
+    finally:
+        session.close()
+        Base.metadata.drop_all(bind=engine)
 
 
 class TestDatabaseInitialization:
