@@ -1,145 +1,111 @@
-"""Shared formatting utilities for frontend display.
+"""Formatting utilities for dashboard display.
 
-Provides consistent formatting for currency, percentages, dates, and null values
-across all frontend components.
+Provides functions for formatting currency, percentages, numbers,
+and dates with proper null handling.
 """
 
-from datetime import datetime
+import logging
 from typing import Any, Optional
+from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 
-def format_currency(value: Optional[float], precision: int = 2) -> str:
+def format_currency(value: Any, default: str = "$0.00") -> str:
     """Format value as currency.
     
     Args:
-        value: Numeric value to format
-        precision: Number of decimal places
+        value: Value to format
+        default: Default string if value is None
         
     Returns:
-        Formatted currency string (e.g., "$1,234.56")
+        Formatted currency string
     """
     if value is None:
-        return "N/A"
-    
+        return default
     try:
-        return f"${value:,.{precision}f}"
-    except (TypeError, ValueError):
-        return "N/A"
+        return f"${float(value):,.2f}"
+    except (ValueError, TypeError):
+        return default
 
 
-def format_percentage(value: Optional[float], precision: int = 2) -> str:
+def format_percentage(value: Any, default: str = "0.00%") -> str:
     """Format value as percentage.
     
     Args:
-        value: Numeric value to format (0.05 = 5%)
-        precision: Number of decimal places
+        value: Value to format (0-100 or 0-1)
+        default: Default string if value is None
         
     Returns:
-        Formatted percentage string (e.g., "5.00%")
+        Formatted percentage string
     """
     if value is None:
-        return "N/A"
-    
+        return default
     try:
-        return f"{value * 100:.{precision}f}%"
-    except (TypeError, ValueError):
-        return "N/A"
+        num = float(value)
+        # If value is between 0 and 1, assume it's a decimal
+        if -1 <= num <= 1:
+            num = num * 100
+        return f"{num:.2f}%"
+    except (ValueError, TypeError):
+        return default
 
 
-def format_number(value: Optional[float], precision: int = 2) -> str:
-    """Format value as number with thousands separator.
+def format_number(value: Any, default: str = "0") -> str:
+    """Format value as number.
     
     Args:
-        value: Numeric value to format
-        precision: Number of decimal places
+        value: Value to format
+        default: Default string if value is None
         
     Returns:
-        Formatted number string (e.g., "1,234.56")
+        Formatted number string
     """
     if value is None:
-        return "N/A"
-    
+        return default
     try:
-        return f"{value:,.{precision}f}"
-    except (TypeError, ValueError):
-        return "N/A"
+        return f"{int(value):,}"
+    except (ValueError, TypeError):
+        return default
 
 
-def format_date(value: Optional[str], format_str: str = "%Y-%m-%d %H:%M:%S") -> str:
-    """Format ISO datetime string to readable format.
+def format_date(value: Any, default: str = "Not available") -> str:
+    """Format value as date.
     
     Args:
-        value: ISO datetime string
-        format_str: Output format string
+        value: Value to format (datetime or string)
+        default: Default string if value is None
         
     Returns:
         Formatted date string
     """
     if value is None:
-        return "N/A"
-    
-    try:
-        if isinstance(value, str):
-            dt = datetime.fromisoformat(value.replace('Z', '+00:00'))
-        else:
-            dt = value
-        return dt.strftime(format_str)
-    except (TypeError, ValueError, AttributeError):
-        return "N/A"
-
-
-def format_score(value: Optional[float], precision: int = 2) -> str:
-    """Format score value (typically 0-100).
-    
-    Args:
-        value: Score value
-        precision: Number of decimal places
-        
-    Returns:
-        Formatted score string (e.g., "85.50")
-    """
-    if value is None:
-        return "N/A"
-    
-    try:
-        return f"{value:.{precision}f}"
-    except (TypeError, ValueError):
-        return "N/A"
-
-
-def format_null_value(value: Any, default: str = "N/A") -> str:
-    """Format null or empty values.
-    
-    Args:
-        value: Value to check
-        default: Default string for null/empty values
-        
-    Returns:
-        Value as string or default
-    """
-    if value is None or value == "" or value == []:
         return default
-    
-    return str(value)
+    try:
+        if isinstance(value, datetime):
+            return value.strftime("%Y-%m-%d %H:%M:%S")
+        elif isinstance(value, str):
+            # Try to parse ISO format
+            dt = datetime.fromisoformat(value.replace('Z', '+00:00'))
+            return dt.strftime("%Y-%m-%d %H:%M:%S")
+        return default
+    except (ValueError, TypeError, AttributeError):
+        return default
 
 
-def format_change(value: Optional[float], precision: int = 2) -> str:
-    """Format change value with +/- indicator.
+def format_price(value: Any, default: str = "Price unavailable") -> str:
+    """Format value as price.
     
     Args:
-        value: Change value
-        precision: Number of decimal places
+        value: Value to format
+        default: Default string if value is None
         
     Returns:
-        Formatted change string (e.g., "+5.50" or "-2.30")
+        Formatted price string
     """
     if value is None:
-        return "N/A"
-    
+        return default
     try:
-        if value >= 0:
-            return f"+{value:.{precision}f}"
-        else:
-            return f"{value:.{precision}f}"
-    except (TypeError, ValueError):
-        return "N/A"
+        return f"${float(value):.2f}"
+    except (ValueError, TypeError):
+        return default
