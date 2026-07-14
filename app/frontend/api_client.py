@@ -1,224 +1,235 @@
-"""Reusable API client for frontend dashboard.
+"""API client for backend communication.
 
-Provides a centralized, configurable client for all dashboard API calls.
-Handles base URL and dashboard prefix configuration to support backend changes.
+Provides a centralized interface for all backend API calls with error handling,
+loading states, and configurable base URL.
 """
 
 import logging
-from typing import Optional, Dict, Any
+from typing import Any, Dict, List, Optional
 import os
 
 logger = logging.getLogger(__name__)
 
 
-class APIClient:
-    """Reusable API client for dashboard endpoints.
+class APIError(Exception):
+    """Custom exception for API errors."""
     
-    Centralizes all API calls with configurable base URL and dashboard prefix.
-    Supports environment variable configuration for easy backend URL changes.
+    def __init__(self, message: str, status_code: Optional[int] = None, response: Optional[Dict] = None):
+        self.message = message
+        self.status_code = status_code
+        self.response = response
+        super().__init__(self.message)
+
+
+class APIClient:
+    """Client for backend API communication.
+    
+    Centralizes all API calls and provides error handling, loading states,
+    and configurable base URL.
     """
-
-    def __init__(
-        self,
-        base_url: Optional[str] = None,
-        dashboard_prefix: Optional[str] = None,
-    ):
-        """Initialize API client with configurable endpoints.
+    
+    def __init__(self, base_url: str = None, dashboard_prefix: str = None):
+        """Initialize API client.
         
         Args:
-            base_url: Base URL for API (e.g., 'http://localhost:8000/api')
-                     Defaults to env var API_BASE_URL or 'http://localhost:8000/api'
-            dashboard_prefix: Prefix for dashboard routes (e.g., '/api/dashboard')
-                             Defaults to env var DASHBOARD_PREFIX or '/api/dashboard'
+            base_url: Base URL for API (defaults to env var or localhost)
+            dashboard_prefix: Prefix for dashboard routes (defaults to /api/api/dashboard)
         """
-        self.base_url = base_url or os.getenv(
-            "API_BASE_URL", "http://localhost:8000/api"
-        )
-        self.dashboard_prefix = dashboard_prefix or os.getenv(
-            "DASHBOARD_PREFIX", "/api/dashboard"
-        )
-        
-        # Remove trailing slashes for consistent URL building
-        self.base_url = self.base_url.rstrip("/")
-        self.dashboard_prefix = self.dashboard_prefix.rstrip("/")
-
-    def _build_url(self, endpoint: str) -> str:
-        """Build full URL from endpoint path.
+        self.base_url = base_url or os.getenv('API_BASE_URL', 'http://localhost:8000')
+        self.dashboard_prefix = dashboard_prefix or os.getenv('DASHBOARD_PREFIX', '/api/api/dashboard')
+        self.demo_user_id = int(os.getenv('DEMO_USER_ID', '1'))
+    
+    def _make_request(self, method: str, endpoint: str, params: Dict[str, Any] = None, 
+                     json_data: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Make HTTP request to backend.
         
         Args:
-            endpoint: Endpoint path (e.g., '/' or '/watchlist')
+            method: HTTP method (GET, POST, etc.)
+            endpoint: API endpoint path
+            params: Query parameters
+            json_data: JSON request body
             
         Returns:
-            Full URL for the endpoint
-        """
-        return f"{self.base_url}{self.dashboard_prefix}{endpoint}"
-
-    async def health_check(self) -> Dict[str, Any]:
-        """Check API health status.
-        
-        Returns:
-            Health check response
+            Response JSON as dictionary
             
         Raises:
             APIError: If request fails
         """
         try:
-            import httpx
-            async with httpx.AsyncClient() as client:
-                url = f"{self.base_url}/health"
-                response = await client.get(url, timeout=10.0)
-                response.raise_for_status()
-                return response.json()
+            import requests
+            
+            url = f"{self.base_url}{endpoint}"
+            headers = {'Content-Type': 'application/json'}
+            
+            response = requests.request(
+                method=method,
+                url=url,
+                params=params,
+                json=json_data,
+                headers=headers,
+                timeout=30
+            )
+            
+            if response.status_code >= 400:
+                try:
+                    error_data = response.json()
+                    error_msg = error_data.get('detail', response.text)
+                except:
+                    error_msg = response.text
+                
+                raise APIError(
+                    f"API request failed: {error_msg}",
+                    status_code=response.status_code,
+                    response=error_data if 'error_data' in locals() else None
+                )
+            
+            return response.json()
+        except APIError:
+            raise
         except Exception as e:
-            logger.error(f"Health check failed: {e}")
-            raise APIError(f"Health check failed: {str(e)}")
-
-    async def get_dashboard(
-        self, user_id: int, watchlist_id: Optional[int] = None
-    ) -> Dict[str, Any]:
-        """Get complete dashboard data for user.
+            logger.error(f"API request error: {e}", exc_info=True)
+            raise APIError(f"API request failed: {str(e)}")
+    
+    def health_check(self) -> Dict[str, Any]:
+        """Check API health.
+        
+        Returns:
+            Health status response
+        """
+        return self._make_request('GET', '/api/health')
+    
+    def get_dashboard(self, user_id: int = None) -> Dict[str, Any]:
+        """Get full dashboard data.
         
         Args:
-            user_id: User ID
-            watchlist_id: Optional specific watchlist ID
+            user_id: User ID (defaults to demo user)
             
         Returns:
-            Dashboard data with all sections
-            
-        Raises:
-            APIError: If request fails
+            Dashboard data including portfolio, watchlist, opportunities, etc.
         """
-        try:
-            import httpx
-            async with httpx.AsyncClient() as client:
-                url = self._build_url("/")
-                params = {"user_id": user_id}
-                if watchlist_id is not None:
-                    params["watchlist_id"] = watchlist_id
-                response = await client.get(url, params=params, timeout=10.0)
-                response.raise_for_status()
-                return response.json()
-        except Exception as e:
-            logger.error(f"Failed to get dashboard data: {e}")
-            raise APIError(f"Failed to get dashboard data: {str(e)}")
-
-    async def get_portfolio(
-        self, user_id: int
-    ) -> Dict[str, Any]:
-        """Get portfolio summary for user.
+        user_id = user_id or self.demo_user_id
+        return self._make_request(
+            'GET',
+            f"{self.dashboard_prefix}/",
+            params={'user_id': user_id}
+        )
+    
+    def get_portfolio(self, user_id: int = None) -> Dict[str, Any]:
+        """Get portfolio summary.
         
         Args:
-            user_id: User ID
+            user_id: User ID (defaults to demo user)
             
         Returns:
             Portfolio summary data
-            
-        Raises:
-            APIError: If request fails
         """
-        try:
-            import httpx
-            async with httpx.AsyncClient() as client:
-                url = self._build_url("/portfolio")
-                response = await client.get(
-                    url, params={"user_id": user_id}, timeout=10.0
-                )
-                response.raise_for_status()
-                return response.json()
-        except Exception as e:
-            logger.error(f"Failed to get portfolio: {e}")
-            raise APIError(f"Failed to get portfolio: {str(e)}")
-
-    async def get_watchlist(
-        self, user_id: int, watchlist_id: Optional[int] = None
-    ) -> Dict[str, Any]:
-        """Get watchlist for user with current prices.
+        user_id = user_id or self.demo_user_id
+        return self._make_request(
+            'GET',
+            f"{self.dashboard_prefix}/portfolio",
+            params={'user_id': user_id}
+        )
+    
+    def get_watchlist(self, user_id: int = None) -> Dict[str, Any]:
+        """Get watchlist.
         
         Args:
-            user_id: User ID
-            watchlist_id: Optional specific watchlist ID
+            user_id: User ID (defaults to demo user)
             
         Returns:
-            Watchlist with symbols and prices
-            
-        Raises:
-            APIError: If request fails
+            Watchlist data with symbols and prices
         """
-        try:
-            import httpx
-            async with httpx.AsyncClient() as client:
-                url = self._build_url("/watchlist")
-                params = {"user_id": user_id}
-                if watchlist_id is not None:
-                    params["watchlist_id"] = watchlist_id
-                response = await client.get(url, params=params, timeout=10.0)
-                response.raise_for_status()
-                return response.json()
-        except Exception as e:
-            logger.error(f"Failed to get watchlist: {e}")
-            raise APIError(f"Failed to get watchlist: {str(e)}")
-
-    async def add_watchlist_symbol(
-        self, user_id: int, symbol: str, watchlist_id: Optional[int] = None
-    ) -> Dict[str, Any]:
-        """Add a symbol to user's watchlist.
+        user_id = user_id or self.demo_user_id
+        return self._make_request(
+            'GET',
+            f"{self.dashboard_prefix}/watchlist",
+            params={'user_id': user_id}
+        )
+    
+    def get_opportunities(self, user_id: int = None, limit: int = 10) -> Dict[str, Any]:
+        """Get trading opportunities.
         
         Args:
-            user_id: User ID
-            symbol: Stock symbol to add
-            watchlist_id: Optional specific watchlist ID
+            user_id: User ID (defaults to demo user)
+            limit: Maximum number of opportunities to return
             
         Returns:
-            Updated watchlist
-            
-        Raises:
-            APIError: If request fails
+            Opportunities data
         """
-        try:
-            import httpx
-            async with httpx.AsyncClient() as client:
-                url = self._build_url("/watchlist/add")
-                params = {"user_id": user_id, "symbol": symbol}
-                if watchlist_id is not None:
-                    params["watchlist_id"] = watchlist_id
-                response = await client.post(url, params=params, timeout=10.0)
-                response.raise_for_status()
-                return response.json()
-        except Exception as e:
-            logger.error(f"Failed to add watchlist symbol: {e}")
-            raise APIError(f"Failed to add watchlist symbol: {str(e)}")
-
-    async def remove_watchlist_symbol(
-        self, user_id: int, symbol: str, watchlist_id: Optional[int] = None
-    ) -> Dict[str, Any]:
-        """Remove a symbol from user's watchlist.
+        user_id = user_id or self.demo_user_id
+        return self._make_request(
+            'GET',
+            f"{self.dashboard_prefix}/opportunities",
+            params={'user_id': user_id, 'limit': limit}
+        )
+    
+    def get_opportunity_detail(self, signal_id: str, user_id: int = None) -> Dict[str, Any]:
+        """Get detailed opportunity data.
         
         Args:
-            user_id: User ID
-            symbol: Stock symbol to remove
-            watchlist_id: Optional specific watchlist ID
+            signal_id: Signal ID
+            user_id: User ID (defaults to demo user)
             
         Returns:
-            Updated watchlist
-            
-        Raises:
-            APIError: If request fails
+            Detailed opportunity data
         """
-        try:
-            import httpx
-            async with httpx.AsyncClient() as client:
-                url = self._build_url("/watchlist/remove")
-                params = {"user_id": user_id, "symbol": symbol}
-                if watchlist_id is not None:
-                    params["watchlist_id"] = watchlist_id
-                response = await client.post(url, params=params, timeout=10.0)
-                response.raise_for_status()
-                return response.json()
-        except Exception as e:
-            logger.error(f"Failed to remove watchlist symbol: {e}")
-            raise APIError(f"Failed to remove watchlist symbol: {str(e)}")
-
-    async def validate_symbol(self, symbol: str) -> Dict[str, Any]:
+        user_id = user_id or self.demo_user_id
+        return self._make_request(
+            'GET',
+            f"{self.dashboard_prefix}/opportunities/{signal_id}",
+            params={'user_id': user_id}
+        )
+    
+    def get_trades(self, user_id: int = None) -> Dict[str, Any]:
+        """Get open trades.
+        
+        Args:
+            user_id: User ID (defaults to demo user)
+            
+        Returns:
+            Trades data
+        """
+        user_id = user_id or self.demo_user_id
+        return self._make_request(
+            'GET',
+            f"{self.dashboard_prefix}/trades",
+            params={'user_id': user_id}
+        )
+    
+    def get_news(self, user_id: int = None, limit: int = 20) -> Dict[str, Any]:
+        """Get recent news.
+        
+        Args:
+            user_id: User ID (defaults to demo user)
+            limit: Maximum number of news items
+            
+        Returns:
+            News data
+        """
+        user_id = user_id or self.demo_user_id
+        return self._make_request(
+            'GET',
+            f"{self.dashboard_prefix}/news",
+            params={'user_id': user_id, 'limit': limit}
+        )
+    
+    def get_risk_settings(self, user_id: int = None) -> Dict[str, Any]:
+        """Get risk settings.
+        
+        Args:
+            user_id: User ID (defaults to demo user)
+            
+        Returns:
+            Risk settings data
+        """
+        user_id = user_id or self.demo_user_id
+        return self._make_request(
+            'GET',
+            f"{self.dashboard_prefix}/risk-settings",
+            params={'user_id': user_id}
+        )
+    
+    def validate_symbol(self, symbol: str) -> Dict[str, Any]:
         """Validate a stock symbol.
         
         Args:
@@ -226,127 +237,76 @@ class APIClient:
             
         Returns:
             Validation result
-            
-        Raises:
-            APIError: If request fails
         """
-        try:
-            import httpx
-            async with httpx.AsyncClient() as client:
-                url = self._build_url("/watchlist/validate")
-                response = await client.post(
-                    url, params={"symbol": symbol}, timeout=10.0
-                )
-                response.raise_for_status()
-                return response.json()
-        except Exception as e:
-            logger.error(f"Failed to validate symbol: {e}")
-            raise APIError(f"Failed to validate symbol: {str(e)}")
-
-    async def get_opportunities(
-        self, user_id: int, limit: int = 10
-    ) -> Dict[str, Any]:
-        """Get top opportunities for user.
+        return self._make_request(
+            'POST',
+            f"{self.dashboard_prefix}/watchlist/validate",
+            params={'symbol': symbol}
+        )
+    
+    def add_watchlist_symbol(self, symbol: str, user_id: int = None) -> Dict[str, Any]:
+        """Add symbol to watchlist.
         
         Args:
-            user_id: User ID
-            limit: Maximum number of opportunities to return
+            symbol: Stock symbol to add
+            user_id: User ID (defaults to demo user)
             
         Returns:
-            List of top opportunities
-            
-        Raises:
-            APIError: If request fails
+            Add result
         """
-        try:
-            import httpx
-            async with httpx.AsyncClient() as client:
-                url = self._build_url("/opportunities")
-                response = await client.get(
-                    url, params={"user_id": user_id, "limit": limit}, timeout=10.0
-                )
-                response.raise_for_status()
-                return response.json()
-        except Exception as e:
-            logger.error(f"Failed to get opportunities: {e}")
-            raise APIError(f"Failed to get opportunities: {str(e)}")
-
-    async def get_risk_settings(self, user_id: int) -> Dict[str, Any]:
-        """Get risk settings for user.
+        user_id = user_id or self.demo_user_id
+        return self._make_request(
+            'POST',
+            f"{self.dashboard_prefix}/watchlist/add",
+            params={'user_id': user_id, 'symbol': symbol}
+        )
+    
+    def remove_watchlist_symbol(self, symbol: str, user_id: int = None) -> Dict[str, Any]:
+        """Remove symbol from watchlist.
         
         Args:
-            user_id: User ID
+            symbol: Stock symbol to remove
+            user_id: User ID (defaults to demo user)
             
         Returns:
-            Risk settings
-            
-        Raises:
-            APIError: If request fails
+            Remove result
         """
-        try:
-            import httpx
-            async with httpx.AsyncClient() as client:
-                url = self._build_url("/risk-settings")
-                response = await client.get(
-                    url, params={"user_id": user_id}, timeout=10.0
-                )
-                response.raise_for_status()
-                return response.json()
-        except Exception as e:
-            logger.error(f"Failed to get risk settings: {e}")
-            raise APIError(f"Failed to get risk settings: {str(e)}")
-
-    async def update_risk_settings(
-        self,
-        user_id: int,
-        risk_level: str,
-        confirmed: bool = False,
-    ) -> Dict[str, Any]:
-        """Update risk settings for user.
+        user_id = user_id or self.demo_user_id
+        return self._make_request(
+            'POST',
+            f"{self.dashboard_prefix}/watchlist/remove",
+            params={'user_id': user_id, 'symbol': symbol}
+        )
+    
+    def update_risk_settings(self, risk_level: str, confirmed: bool = False, 
+                            user_id: int = None) -> Dict[str, Any]:
+        """Update risk settings.
         
         Args:
-            user_id: User ID
             risk_level: Risk level (low, medium, high)
             confirmed: Whether user confirmed the change
+            user_id: User ID (defaults to demo user)
             
         Returns:
-            Updated risk settings
-            
-        Raises:
-            APIError: If request fails
+            Update result
         """
-        try:
-            import httpx
-            async with httpx.AsyncClient() as client:
-                url = self._build_url("/risk-settings/update")
-                params = {
-                    "user_id": user_id,
-                    "risk_level": risk_level,
-                    "confirmed": confirmed,
-                }
-                response = await client.post(url, params=params, timeout=10.0)
-                response.raise_for_status()
-                return response.json()
-        except Exception as e:
-            logger.error(f"Failed to update risk settings: {e}")
-            raise APIError(f"Failed to update risk settings: {str(e)}")
+        user_id = user_id or self.demo_user_id
+        return self._make_request(
+            'POST',
+            f"{self.dashboard_prefix}/risk-settings/update",
+            params={
+                'user_id': user_id,
+                'risk_level': risk_level,
+                'confirmed': confirmed
+            }
+        )
 
 
-class APIError(Exception):
-    """Exception raised for API client errors."""
-
-    pass
+_api_client_instance: Optional[APIClient] = None
 
 
-# Global API client instance
-_api_client: Optional[APIClient] = None
-
-
-def get_api_client(
-    base_url: Optional[str] = None,
-    dashboard_prefix: Optional[str] = None,
-) -> APIClient:
-    """Get or create global API client instance.
+def get_api_client(base_url: str = None, dashboard_prefix: str = None) -> APIClient:
+    """Get or create API client singleton.
     
     Args:
         base_url: Optional base URL override
@@ -355,7 +315,12 @@ def get_api_client(
     Returns:
         APIClient instance
     """
-    global _api_client
-    if _api_client is None or base_url is not None or dashboard_prefix is not None:
-        _api_client = APIClient(base_url=base_url, dashboard_prefix=dashboard_prefix)
-    return _api_client
+    global _api_client_instance
+    
+    if base_url or dashboard_prefix:
+        return APIClient(base_url=base_url, dashboard_prefix=dashboard_prefix)
+    
+    if _api_client_instance is None:
+        _api_client_instance = APIClient()
+    
+    return _api_client_instance
