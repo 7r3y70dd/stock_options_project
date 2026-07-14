@@ -6,7 +6,10 @@ portfolio, watchlist, opportunities, trades, news, and risk settings.
 
 import logging
 from typing import Any, Dict, List, Optional
+from datetime import datetime, timedelta
 from app.frontend.api_client import APIClient, APIError
+from app.models.database import MarketQuote, WatchlistSymbol
+from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
@@ -14,13 +17,15 @@ logger = logging.getLogger(__name__)
 class Dashboard:
     """Dashboard service for data aggregation."""
     
-    def __init__(self, api_client: APIClient):
+    def __init__(self, api_client: APIClient, db: Optional[Session] = None):
         """Initialize dashboard service.
         
         Args:
             api_client: API client instance
+            db: Optional database session for local queries
         """
         self.api_client = api_client
+        self.db = db
     
     def get_dashboard_data(self, user_id: int = None) -> Dict[str, Any]:
         """Get full dashboard data.
@@ -59,19 +64,52 @@ class Dashboard:
             raise
     
     def get_watchlist(self, user_id: int = None) -> Dict[str, Any]:
-        """Get watchlist.
+        """Get watchlist with current prices and data freshness.
+        
+        Fetches watchlist symbols and enriches with latest market quotes
+        from the database.
         
         Args:
             user_id: User ID (optional)
             
         Returns:
-            Watchlist data
+            Watchlist data with current_price, last_updated, data_freshness_seconds
             
         Raises:
             APIError: If API call fails
         """
         try:
-            return self.api_client.get_watchlist(user_id=user_id)
+            watchlist_data = self.api_client.get_watchlist(user_id=user_id)
+            
+            # Enrich with market quote data if database available
+            if self.db and isinstance(watchlist_data, dict) and "symbols" in watchlist_data:
+                for item in watchlist_data["symbols"]:
+                    symbol = item.get("symbol")
+                    if symbol and user_id:
+                        # Get latest market quote for this symbol
+                        try:
+                            ws = self.db.query(WatchlistSymbol).filter(
+                                WatchlistSymbol.user_id == user_id,
+                                WatchlistSymbol.symbol == symbol
+                            ).first()
+                            
+                            if ws:
+                                latest_quote = self.db.query(MarketQuote).filter(
+                                    MarketQuote.watchlist_symbol_id == ws.id
+                                ).order_by(MarketQuote.fetched_at.desc()).first()
+                                
+                                if latest_quote:
+                                    item["current_price"] = latest_quote.price
+                                    item["last_updated"] = latest_quote.fetched_at.isoformat()
+                                    
+                                    # Calculate data freshness
+                                    now = datetime.utcnow()
+                                    freshness = (now - latest_quote.fetched_at).total_seconds()
+                                    item["data_freshness_seconds"] = int(freshness)
+                        except Exception as e:
+                            logger.warning(f"Error enriching watchlist for {symbol}: {e}")
+            
+            return watchlist_data
         except APIError as e:
             logger.error(f"Error fetching watchlist: {e.message}")
             raise

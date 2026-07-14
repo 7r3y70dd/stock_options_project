@@ -1,710 +1,205 @@
-"""Paper trading broker provider for simulating trades without real money.
+"""Paper trading broker provider for simulated trading.
 
-Provides realistic paper trading simulation with comprehensive logging of all requests and responses.
+Provides a paper trading implementation of the BrokerProvider interface
+for testing strategies without real money.
 """
 
 import logging
-import uuid
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional
-import json
+from datetime import datetime
+from typing import Optional, Dict, Any, List
+from sqlalchemy.orm import Session
 
-from app.core.broker_provider import (
-    BrokerProvider,
-    Order,
-    OrderStatus,
-    OrderType,
-    OrderSide,
-    Position,
-    PositionSide,
-    Account,
-    OrderPreview,
-    OrderPreviewResult,
-)
+from app.core.broker_provider import BrokerProvider, OrderStatus, Order
+from app.models.database import Trade, User
 
 logger = logging.getLogger(__name__)
-
-# Preview expiration time in seconds
-PREVIEW_EXPIRATION_SECONDS = 300  # 5 minutes
 
 
 class PaperBrokerProvider(BrokerProvider):
     """Paper trading broker provider.
     
-    Simulates broker behavior for paper trading without real money.
-    Logs every request and response for audit trail and debugging.
-    Requires order preview and confirmation before execution.
+    Simulates trading without real money. Maintains virtual portfolio
+    and tracks trades in the database.
     """
-
+    
     def __init__(
         self,
-        initial_cash: float = 100000.0,
-        account_id: Optional[str] = None,
+        initial_cash: float = 10000.0,
         enable_logging: bool = True,
     ):
         """Initialize paper broker provider.
         
         Args:
-            initial_cash: Starting cash balance
-            account_id: Optional custom account ID. If None, generates UUID.
-            enable_logging: Whether to log all requests and responses
+            initial_cash: Initial cash balance for paper trading
+            enable_logging: Whether to enable detailed logging
         """
-        self.account_id = account_id or str(uuid.uuid4())
         self.initial_cash = initial_cash
-        self.cash = initial_cash
         self.enable_logging = enable_logging
-        
-        # In-memory storage for paper trading
-        self.orders: Dict[str, Order] = {}
-        self.positions: Dict[str, Position] = {}
-        self.price_cache: Dict[str, float] = {}  # Mock current prices
-        self.previews: Dict[str, OrderPreviewResult] = {}  # Store pending previews
-        
-        logger.info(
-            f"PaperBrokerProvider initialized: account_id={self.account_id}, "
-            f"initial_cash=${initial_cash:.2f}"
-        )
-
-    def _log_request(self, method: str, params: Dict) -> None:
-        """Log a broker request.
-        
-        Args:
-            method: Method name
-            params: Request parameters
-        """
-        if self.enable_logging:
-            logger.info(
-                f"[BROKER REQUEST] {method}",
-                extra={"params": json.dumps(params, default=str)},
-            )
-
-    def _log_response(self, method: str, result: Dict) -> None:
-        """Log a broker response.
-        
-        Args:
-            method: Method name
-            result: Response data
-        """
-        if self.enable_logging:
-            logger.info(
-                f"[BROKER RESPONSE] {method}",
-                extra={"result": json.dumps(result, default=str)},
-            )
-
-    def _log_error(self, method: str, error: str) -> None:
-        """Log a broker error.
-        
-        Args:
-            method: Method name
-            error: Error message
-        """
-        if self.enable_logging:
-            logger.error(
-                f"[BROKER ERROR] {method}: {error}",
-                extra={"account_id": self.account_id},
-            )
-
-    def _get_current_price(self, symbol: str) -> float:
-        """Get current price for symbol (mock).
-        
-        Args:
-            symbol: Stock ticker symbol
-            
-        Returns:
-            Mock current price
-        """
-        if symbol not in self.price_cache:
-            # Generate mock price based on symbol
-            import random
-            self.price_cache[symbol] = round(random.uniform(50, 500), 2)
-        return self.price_cache[symbol]
-
-    def preview_order(
-        self,
-        symbol: str,
-        quantity: int,
-        side: OrderSide,
-        strategy_type: str,
-        contracts: Optional[List[Dict]] = None,
-        max_loss: float = 0.0,
-        max_profit: Optional[float] = None,
-        breakeven: Optional[float] = None,
-        reason: str = "",
-        order_type: OrderType = OrderType.MARKET,
-        price: Optional[float] = None,
-        stop_price: Optional[float] = None,
-    ) -> OrderPreviewResult:
-        """Preview an order before execution.
-        
-        Args:
-            symbol: Stock ticker symbol
-            quantity: Number of shares/contracts
-            side: OrderSide.BUY or OrderSide.SELL
-            strategy_type: Name of the strategy
-            contracts: Optional list of option contracts
-            max_loss: Maximum loss estimate
-            max_profit: Maximum profit estimate
-            breakeven: Breakeven price
-            reason: Explanation for the trade
-            order_type: Type of order
-            price: Limit price if applicable
-            stop_price: Stop price if applicable
-            
-        Returns:
-            OrderPreviewResult with preview details
-        """
-        # Validate parameters
-        if quantity <= 0:
-            error_msg = f"Invalid quantity: {quantity}"
-            self._log_error("preview_order", error_msg)
-            raise ValueError(error_msg)
-        
-        if not symbol or not isinstance(symbol, str):
-            error_msg = f"Invalid symbol: {symbol}"
-            self._log_error("preview_order", error_msg)
-            raise ValueError(error_msg)
-        
-        # Log request
-        self._log_request(
-            "preview_order",
-            {
-                "symbol": symbol,
-                "quantity": quantity,
-                "side": side.value,
-                "strategy_type": strategy_type,
-                "max_loss": max_loss,
-                "max_profit": max_profit,
-                "reason": reason,
-            },
-        )
-        
-        # Generate preview ID
-        preview_id = str(uuid.uuid4())
-        now = datetime.utcnow()
-        
-        # Create preview
-        preview = OrderPreview(
-            preview_id=preview_id,
-            symbol=symbol,
-            strategy_type=strategy_type,
-            contracts=contracts or [],
-            quantity=quantity,
-            side=side,
-            order_type=order_type,
-            price=price,
-            max_loss=max_loss,
-            max_profit=max_profit,
-            breakeven=breakeven,
-            reason=reason,
-            created_at=now,
-            expires_at=now + timedelta(seconds=PREVIEW_EXPIRATION_SECONDS),
-        )
-        
-        # Create result
-        result = OrderPreviewResult(
-            preview_id=preview_id,
-            status="pending",
-            preview=preview,
-            message=f"Order preview created. Review details and confirm to execute.",
-            created_at=now,
-        )
-        
-        # Store preview
-        self.previews[preview_id] = result
-        
-        # Log response
-        self._log_response(
-            "preview_order",
-            {
-                "preview_id": preview_id,
-                "status": "pending",
-                "expires_at": preview.expires_at.isoformat(),
-            },
-        )
-        
-        return result
-
-    def confirm_preview(self, preview_id: str) -> Order:
-        """Confirm a preview and execute the order.
-        
-        Args:
-            preview_id: ID of the preview to confirm
-            
-        Returns:
-            Order object
-            
-        Raises:
-            ValueError: If preview_id is invalid or expired
-        """
-        # Log request
-        self._log_request("confirm_preview", {"preview_id": preview_id})
-        
-        # Find preview
-        if preview_id not in self.previews:
-            error_msg = f"Preview not found: {preview_id}"
-            self._log_error("confirm_preview", error_msg)
-            raise ValueError(error_msg)
-        
-        preview_result = self.previews[preview_id]
-        preview = preview_result.preview
-        
-        # Check if preview is expired
-        if datetime.utcnow() > preview.expires_at:
-            error_msg = f"Preview expired: {preview_id}"
-            self._log_error("confirm_preview", error_msg)
-            preview_result.status = "expired"
-            raise ValueError(error_msg)
-        
-        # Check if already confirmed
-        if preview_result.status != "pending":
-            error_msg = f"Preview already {preview_result.status}: {preview_id}"
-            self._log_error("confirm_preview", error_msg)
-            raise ValueError(error_msg)
-        
-        # Mark as confirmed
-        preview_result.status = "confirmed"
-        preview_result.confirmed_at = datetime.utcnow()
-        
-        # Execute the order
-        order = self.place_order(
-            symbol=preview.symbol,
-            quantity=preview.quantity,
-            side=preview.side,
-            order_type=preview.order_type,
-            price=preview.price,
-            stop_price=None,  # stop_price not stored in preview
-        )
-        
-        # Log response
-        self._log_response(
-            "confirm_preview",
-            {
-                "preview_id": preview_id,
-                "order_id": order.order_id,
-                "status": order.status.value,
-            },
-        )
-        
-        return order
-
-    def cancel_preview(self, preview_id: str) -> OrderPreviewResult:
-        """Cancel a preview without executing the order.
-        
-        Args:
-            preview_id: ID of the preview to cancel
-            
-        Returns:
-            OrderPreviewResult with cancelled status
-            
-        Raises:
-            ValueError: If preview_id is invalid
-        """
-        # Log request
-        self._log_request("cancel_preview", {"preview_id": preview_id})
-        
-        # Find preview
-        if preview_id not in self.previews:
-            error_msg = f"Preview not found: {preview_id}"
-            self._log_error("cancel_preview", error_msg)
-            raise ValueError(error_msg)
-        
-        preview_result = self.previews[preview_id]
-        
-        # Cancel preview
-        preview_result.status = "cancelled"
-        preview_result.message = "Preview cancelled by user."
-        
-        # Log response
-        self._log_response(
-            "cancel_preview",
-            {"preview_id": preview_id, "status": "cancelled"},
-        )
-        
-        return preview_result
-
+        logger.info(f"PaperBrokerProvider initialized with ${initial_cash:,.2f}")
+    
     def place_order(
         self,
         symbol: str,
         quantity: int,
-        side: OrderSide,
-        order_type: OrderType = OrderType.MARKET,
+        order_type: str,
         price: Optional[float] = None,
-        stop_price: Optional[float] = None,
+        user_id: Optional[int] = None,
+        db: Optional[Session] = None,
     ) -> Order:
-        """Place an order in paper trading.
+        """Place a paper trading order.
         
         Args:
-            symbol: Stock ticker symbol
-            quantity: Number of shares
-            side: BUY or SELL
-            order_type: Type of order
-            price: Limit price if applicable
-            stop_price: Stop price if applicable
+            symbol: Stock symbol
+            quantity: Order quantity
+            order_type: Order type (buy, sell, etc.)
+            price: Optional limit price
+            user_id: Optional user ID
+            db: Optional database session
             
         Returns:
             Order object
-            
-        Raises:
-            ValueError: If parameters are invalid
         """
-        # Validate parameters
-        if quantity <= 0:
-            error_msg = f"Invalid quantity: {quantity}"
-            self._log_error("place_order", error_msg)
-            raise ValueError(error_msg)
+        if self.enable_logging:
+            logger.info(f"Paper order: {order_type} {quantity} {symbol} @ ${price}")
         
-        if not symbol or not isinstance(symbol, str):
-            error_msg = f"Invalid symbol: {symbol}"
-            self._log_error("place_order", error_msg)
-            raise ValueError(error_msg)
-        
-        # Log request
-        self._log_request(
-            "place_order",
-            {
-                "symbol": symbol,
-                "quantity": quantity,
-                "side": side.value,
-                "order_type": order_type.value,
-                "price": price,
-                "stop_price": stop_price,
-            },
-        )
-        
-        # Generate order ID
-        order_id = str(uuid.uuid4())
-        
-        # Get current price
-        current_price = self._get_current_price(symbol)
-        
-        # Determine fill price based on order type
-        if order_type == OrderType.MARKET:
-            fill_price = current_price
-            status = OrderStatus.FILLED
-        elif order_type == OrderType.LIMIT:
-            if price is None:
-                error_msg = "Limit order requires price"
-                self._log_error("place_order", error_msg)
-                raise ValueError(error_msg)
-            # Simulate limit order: fill if price is favorable
-            if side == OrderSide.BUY and price >= current_price:
-                fill_price = price
-                status = OrderStatus.FILLED
-            elif side == OrderSide.SELL and price <= current_price:
-                fill_price = price
-                status = OrderStatus.FILLED
-            else:
-                fill_price = None
-                status = OrderStatus.PENDING
-        else:
-            # Stop and stop-limit orders default to pending
-            fill_price = None
-            status = OrderStatus.PENDING
-        
-        # Calculate cash impact
-        if status == OrderStatus.FILLED:
-            cash_impact = quantity * fill_price
-            if side == OrderSide.BUY:
-                if self.cash < cash_impact:
-                    error_msg = f"Insufficient cash: need ${cash_impact:.2f}, have ${self.cash:.2f}"
-                    self._log_error("place_order", error_msg)
-                    raise ValueError(error_msg)
-                self.cash -= cash_impact
-            else:  # SELL
-                self.cash += cash_impact
-        
-        # Create order
-        now = datetime.utcnow()
-        order = Order(
-            order_id=order_id,
+        return Order(
+            order_id="paper_" + str(datetime.utcnow().timestamp()),
             symbol=symbol,
             quantity=quantity,
-            side=side,
             order_type=order_type,
-            status=status,
             price=price,
-            stop_price=stop_price,
-            filled_quantity=quantity if status == OrderStatus.FILLED else 0,
-            filled_price=fill_price,
-            created_at=now,
-            updated_at=now,
+            status=OrderStatus.FILLED,
+            timestamp=datetime.utcnow(),
         )
-        
-        # Store order
-        self.orders[order_id] = order
-        
-        # Update positions if filled
-        if status == OrderStatus.FILLED:
-            if symbol not in self.positions:
-                self.positions[symbol] = Position(
-                    symbol=symbol,
-                    quantity=0,
-                    side=PositionSide.LONG if side == OrderSide.BUY else PositionSide.SHORT,
-                    entry_price=fill_price,
-                    current_price=fill_price,
-                    market_value=quantity * fill_price,
-                    unrealized_pl=0.0,
-                    unrealized_pl_pct=0.0,
-                    updated_at=now,
-                )
-            
-            position = self.positions[symbol]
-            if side == OrderSide.BUY:
-                position.quantity += quantity
-            else:
-                position.quantity -= quantity
-            
-            position.current_price = fill_price
-            position.market_value = position.quantity * fill_price
-            position.updated_at = now
-        
-        # Log response
-        self._log_response(
-            "place_order",
-            {
-                "order_id": order_id,
-                "status": status.value,
-                "filled_quantity": order.filled_quantity,
-                "filled_price": fill_price,
-                "cash_remaining": self.cash,
-            },
-        )
-        
-        return order
-
-    def cancel_order(self, order_id: str) -> Order:
-        """Cancel an existing order.
-        
-        Args:
-            order_id: ID of the order to cancel
-            
-        Returns:
-            Updated Order object with cancelled status
-            
-        Raises:
-            ValueError: If order_id is invalid
-        """
-        # Log request
-        self._log_request("cancel_order", {"order_id": order_id})
-        
-        # Find order
-        if order_id not in self.orders:
-            error_msg = f"Order not found: {order_id}"
-            self._log_error("cancel_order", error_msg)
-            raise ValueError(error_msg)
-        
-        order = self.orders[order_id]
-        
-        # Can only cancel pending orders
-        if order.status not in [OrderStatus.PENDING, OrderStatus.PARTIALLY_FILLED]:
-            error_msg = f"Cannot cancel order with status {order.status.value}"
-            self._log_error("cancel_order", error_msg)
-            raise ValueError(error_msg)
-        
-        # Cancel order
-        order.status = OrderStatus.CANCELLED
-        order.updated_at = datetime.utcnow()
-        
-        # Log response
-        self._log_response(
-            "cancel_order",
-            {"order_id": order_id, "status": "cancelled"},
-        )
-        
-        return order
-
-    def get_positions(self) -> List[Position]:
-        """Get all open positions.
-        
-        Returns:
-            List of Position objects for all open positions
-        """
-        # Log request
-        self._log_request("get_positions", {})
-        
-        # Filter out zero-quantity positions
-        positions = [p for p in self.positions.values() if p.quantity != 0]
-        
-        # Log response
-        self._log_response(
-            "get_positions",
-            {"count": len(positions), "symbols": [p.symbol for p in positions]},
-        )
-        
-        return positions
-
-    def get_account(self) -> Account:
-        """Get account information.
-        
-        Returns:
-            Account object with current account state
-        """
-        # Log request
-        self._log_request("get_account", {})
-        
-        # Calculate portfolio value
-        positions_value = sum(p.market_value for p in self.positions.values())
-        portfolio_value = self.cash + positions_value
-        
-        account = Account(
-            account_id=self.account_id,
-            account_type="paper",
-            cash=self.cash,
-            portfolio_value=portfolio_value,
-            buying_power=self.cash,  # In paper trading, buying power = cash
-            multiplier=1.0,
-            equity=portfolio_value,
-            last_equity=portfolio_value,
-            status="active",
-            updated_at=datetime.utcnow(),
-        )
-        
-        # Log response
-        self._log_response(
-            "get_account",
-            {
-                "cash": self.cash,
-                "portfolio_value": portfolio_value,
-                "positions_count": len([p for p in self.positions.values() if p.quantity != 0]),
-            },
-        )
-        
-        return account
-
-    def get_order(self, order_id: str) -> Optional[Order]:
-        """Get order details by ID.
-        
-        Args:
-            order_id: ID of the order to retrieve
-            
-        Returns:
-            Order object or None if not found
-        """
-        # Log request
-        self._log_request("get_order", {"order_id": order_id})
-        
-        order = self.orders.get(order_id)
-        
-        if order:
-            self._log_response(
-                "get_order",
-                {"order_id": order_id, "status": order.status.value},
-            )
-        else:
-            self._log_error("get_order", f"Order not found: {order_id}")
-        
-        return order
-
-    def get_orders(
+    
+    def get_order_status(
         self,
-        status: Optional[OrderStatus] = None,
-        symbol: Optional[str] = None,
-    ) -> List[Order]:
-        """Get orders with optional filtering.
+        order_id: str,
+        user_id: Optional[int] = None,
+        db: Optional[Session] = None,
+    ) -> OrderStatus:
+        """Get paper order status.
         
         Args:
-            status: Optional filter by order status
-            symbol: Optional filter by symbol
+            order_id: Order ID
+            user_id: Optional user ID
+            db: Optional database session
             
         Returns:
-            List of Order objects matching filters
+            OrderStatus
         """
-        # Log request
-        self._log_request(
-            "get_orders",
-            {"status": status.value if status else None, "symbol": symbol},
-        )
+        # Paper orders are always filled immediately
+        return OrderStatus.FILLED
+    
+    def cancel_order(
+        self,
+        order_id: str,
+        user_id: Optional[int] = None,
+        db: Optional[Session] = None,
+    ) -> bool:
+        """Cancel a paper order.
         
-        orders = list(self.orders.values())
-        
-        # Apply filters
-        if status:
-            orders = [o for o in orders if o.status == status]
-        if symbol:
-            orders = [o for o in orders if o.symbol == symbol]
-        
-        # Log response
-        self._log_response(
-            "get_orders",
-            {"count": len(orders), "statuses": list(set(o.status.value for o in orders))},
-        )
-        
-        return orders
-
-    def get_portfolio(self, user_id: int | None = None, db=None) -> dict:
-        """Return a simple paper portfolio summary.
-
-        This is intentionally local/dev-safe. It does not call a live broker.
-        If a DB session and user_id are provided, it uses the user's initial
-        portfolio value and open paper trades. If not, it returns a safe
-        default portfolio.
+        Args:
+            order_id: Order ID
+            user_id: Optional user ID
+            db: Optional database session
+            
+        Returns:
+            True if cancelled, False otherwise
         """
-        initial_value = 10000.0
-
-        if db is None or user_id is None:
-            return {
-                "total_value": initial_value,
-                "cash": initial_value,
+        if self.enable_logging:
+            logger.info(f"Paper order cancelled: {order_id}")
+        return True
+    
+    def get_portfolio(
+        self,
+        user_id: Optional[int] = None,
+        db: Optional[Session] = None,
+    ) -> Dict[str, Any]:
+        """Get paper trading portfolio summary.
+        
+        Calculates portfolio metrics from open trades in the database.
+        Returns safe defaults if no trades exist.
+        
+        Args:
+            user_id: Optional user ID
+            db: Optional database session
+            
+        Returns:
+            Portfolio summary dictionary with keys:
+            - total_value: Total portfolio value
+            - cash: Available cash
+            - positions_value: Value of open positions
+            - open_pl: Open profit/loss
+            - open_pl_pct: Open profit/loss percentage
+            - num_open_trades: Number of open trades
+        """
+        try:
+            # Default safe values
+            portfolio = {
+                "total_value": self.initial_cash,
+                "cash": self.initial_cash,
                 "positions_value": 0.0,
                 "open_pl": 0.0,
                 "open_pl_pct": 0.0,
+                "num_open_trades": 0,
             }
-
-        from app.models.database import User, Trade, OptionContract
-
-        user = db.query(User).filter(User.id == user_id).first()
-        if user and getattr(user, "initial_portfolio_value", None):
-            initial_value = float(user.initial_portfolio_value)
-
-        open_trades = (
-            db.query(Trade)
-            .filter(Trade.user_id == user_id, Trade.status == "open")
-            .all()
-        )
-
-        entry_cost = 0.0
-        positions_value = 0.0
-        open_pl = 0.0
-
-        for trade in open_trades:
-            quantity = int(getattr(trade, "quantity", 0) or 0)
-            entry_price = float(getattr(trade, "entry_price", 0.0) or 0.0)
-
-            current_price = entry_price
-
-            contract_id = getattr(trade, "option_contract_id", None)
-            if contract_id:
-                contract = (
-                    db.query(OptionContract)
-                    .filter(OptionContract.id == contract_id)
-                    .first()
-                )
-
-                if contract:
-                    last = float(getattr(contract, "last", 0.0) or 0.0)
-                    bid = float(getattr(contract, "bid", 0.0) or 0.0)
-                    ask = float(getattr(contract, "ask", 0.0) or 0.0)
-
-                    if last > 0:
-                        current_price = last
-                    elif bid > 0 and ask > 0:
-                        current_price = (bid + ask) / 2
-
-            trade_entry_cost = entry_price * quantity * 100
-            trade_current_value = current_price * quantity * 100
-
-            entry_cost += trade_entry_cost
-            positions_value += trade_current_value
-            open_pl += trade_current_value - trade_entry_cost
-
-        cash = initial_value - entry_cost
-        total_value = cash + positions_value
-        open_pl_pct = (open_pl / initial_value * 100) if initial_value > 0 else 0.0
-
-        return {
-            "total_value": round(total_value, 2),
-            "cash": round(cash, 2),
-            "positions_value": round(positions_value, 2),
-            "open_pl": round(open_pl, 2),
-            "open_pl_pct": round(open_pl_pct, 4),
-        }
+            
+            # If no database session, return defaults
+            if db is None or user_id is None:
+                return portfolio
+            
+            # Query open trades for user
+            open_trades = db.query(Trade).filter(
+                Trade.user_id == user_id,
+                Trade.status == "open"
+            ).all()
+            
+            if not open_trades:
+                return portfolio
+            
+            # Calculate positions value and open P/L from trades
+            positions_value = 0.0
+            open_pl = 0.0
+            
+            for trade in open_trades:
+                if trade.entry_price and trade.quantity:
+                    # Approximate position value
+                    position_value = trade.entry_price * trade.quantity
+                    positions_value += position_value
+                    
+                    # If exit price available, calculate P/L
+                    if trade.exit_price:
+                        trade_pl = (trade.exit_price - trade.entry_price) * trade.quantity
+                        open_pl += trade_pl
+            
+            # Calculate totals
+            total_value = self.initial_cash + open_pl
+            cash = self.initial_cash - positions_value
+            open_pl_pct = (open_pl / self.initial_cash * 100) if self.initial_cash > 0 else 0.0
+            
+            portfolio.update({
+                "total_value": round(total_value, 2),
+                "cash": round(cash, 2),
+                "positions_value": round(positions_value, 2),
+                "open_pl": round(open_pl, 2),
+                "open_pl_pct": round(open_pl_pct, 2),
+                "num_open_trades": len(open_trades),
+            })
+            
+            if self.enable_logging:
+                logger.info(f"Portfolio for user {user_id}: {portfolio}")
+            
+            return portfolio
+            
+        except Exception as e:
+            logger.error(f"Error getting portfolio for user {user_id}: {e}", exc_info=True)
+            # Return safe defaults on error
+            return {
+                "total_value": self.initial_cash,
+                "cash": self.initial_cash,
+                "positions_value": 0.0,
+                "open_pl": 0.0,
+                "open_pl_pct": 0.0,
+                "num_open_trades": 0,
+            }

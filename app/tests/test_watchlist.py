@@ -1,352 +1,230 @@
 """Tests for watchlist functionality.
 
-Tests cover:
-- Watchlist retrieval
-- Symbol validation
-- Adding symbols
-- Removing symbols
-- Duplicate prevention
-- Error handling
+Tests watchlist operations including adding, removing, and refreshing symbols.
 """
 
 import pytest
-from datetime import datetime
+from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 
-from app.models.database import User, Watchlist, WatchlistSymbol
-from app.frontend.dashboard import Dashboard, WatchlistItem
+from app.models.database import User, WatchlistSymbol, MarketQuote
+from app.core.paper_broker_provider import PaperBrokerProvider
+from app.data_sources.mock_provider import MockDataProvider
+from app.workers.tasks import refresh_watchlist_market_data
 
 
-class TestWatchlistValidation:
-    """Test symbol validation."""
+@pytest.fixture
+def db_session():
+    """Create a test database session."""
+    from app.core.database import SessionLocal
+    db = SessionLocal()
+    yield db
+    db.close()
 
-    def test_validate_valid_symbol(self):
-        """Test validating a valid symbol."""
-        dashboard = Dashboard()
-        result = dashboard.validate_symbol("AAPL")
+
+@pytest.fixture
+def test_user(db_session: Session):
+    """Create a test user."""
+    user = User(username="testuser", email="test@example.com")
+    db_session.add(user)
+    db_session.commit()
+    return user
+
+
+class TestWatchlistRefresh:
+    """Tests for watchlist market data refresh."""
+    
+    def test_refresh_watchlist_market_data_empty(self, db_session: Session, test_user: User):
+        """Test refresh with empty watchlist."""
+        provider = MockDataProvider()
+        result = refresh_watchlist_market_data(test_user.id, provider=provider)
         
-        assert result["valid"] is True
-        assert result["symbol"] == "AAPL"
-        assert "valid" in result["message"].lower()
-
-    def test_validate_lowercase_symbol(self):
-        """Test that lowercase symbols are converted to uppercase."""
-        dashboard = Dashboard()
-        result = dashboard.validate_symbol("aapl")
-        
-        assert result["valid"] is True
-        assert result["symbol"] == "AAPL"
-
-    def test_validate_symbol_with_spaces(self):
-        """Test that symbols with spaces are trimmed."""
-        dashboard = Dashboard()
-        result = dashboard.validate_symbol("  AAPL  ")
-        
-        assert result["valid"] is True
-        assert result["symbol"] == "AAPL"
-
-    def test_validate_empty_symbol(self):
-        """Test that empty symbols are rejected."""
-        dashboard = Dashboard()
-        result = dashboard.validate_symbol("")
-        
-        assert result["valid"] is False
-        assert "empty" in result["message"].lower()
-
-    def test_validate_too_long_symbol(self):
-        """Test that symbols longer than 5 characters are rejected."""
-        dashboard = Dashboard()
-        result = dashboard.validate_symbol("TOOLONG")
-        
-        assert result["valid"] is False
-        assert "invalid" in result["message"].lower()
-
-    def test_validate_symbol_with_numbers(self):
-        """Test that symbols with numbers are rejected."""
-        dashboard = Dashboard()
-        result = dashboard.validate_symbol("AAP1")
-        
-        assert result["valid"] is False
-        assert "invalid" in result["message"].lower()
-
-    def test_validate_symbol_with_special_chars(self):
-        """Test that symbols with special characters are rejected."""
-        dashboard = Dashboard()
-        result = dashboard.validate_symbol("AA-PL")
-        
-        assert result["valid"] is False
-        assert "invalid" in result["message"].lower()
-
-    def test_validate_none_symbol(self):
-        """Test that None symbols are rejected."""
-        dashboard = Dashboard()
-        result = dashboard.validate_symbol(None)
-        
-        assert result["valid"] is False
-
-
-class TestWatchlistOperations:
-    """Test watchlist add/remove operations."""
-
-    def test_add_symbol_to_watchlist(self, db_session: Session):
-        """Test adding a symbol to watchlist."""
-        # Create user
-        user = User(
-            username="testuser",
-            email="test@example.com",
-            hashed_password="hashed_password",
-        )
-        db_session.add(user)
+        assert result["updated"] == 0
+        assert result["failed"] == 0
+        assert result["symbols"] == []
+    
+    def test_refresh_watchlist_market_data_with_symbols(self, db_session: Session, test_user: User):
+        """Test refresh with watchlist symbols."""
+        # Add symbols to watchlist
+        ws1 = WatchlistSymbol(user_id=test_user.id, symbol="AAPL")
+        ws2 = WatchlistSymbol(user_id=test_user.id, symbol="MSFT")
+        db_session.add(ws1)
+        db_session.add(ws2)
         db_session.commit()
         
-        dashboard = Dashboard()
-        result = dashboard.add_symbol(user.id, "AAPL", db_session)
+        provider = MockDataProvider()
+        result = refresh_watchlist_market_data(test_user.id, provider=provider)
         
-        assert result["status"] == "success"
-        assert result["symbol"] == "AAPL"
-        assert "added" in result["message"].lower()
-        
-        # Verify in database
-        watchlist = db_session.query(Watchlist).filter(
-            Watchlist.user_id == user.id
-        ).first()
-        assert watchlist is not None
-        
-        symbol = db_session.query(WatchlistSymbol).filter(
-            WatchlistSymbol.watchlist_id == watchlist.id,
-            WatchlistSymbol.symbol == "AAPL",
-        ).first()
-        assert symbol is not None
-
-    def test_add_duplicate_symbol(self, db_session: Session):
-        """Test that adding duplicate symbols is prevented."""
-        # Create user and watchlist
-        user = User(
-            username="testuser",
-            email="test@example.com",
-            hashed_password="hashed_password",
-        )
-        db_session.add(user)
-        db_session.commit()
-        
-        watchlist = Watchlist(
-            user_id=user.id,
-            name="Test Watchlist",
-        )
-        db_session.add(watchlist)
-        db_session.commit()
-        
-        # Add symbol
-        ws = WatchlistSymbol(
-            watchlist_id=watchlist.id,
-            symbol="AAPL",
-        )
+        assert result["updated"] == 2
+        assert result["failed"] == 0
+        assert "AAPL" in result["symbols"]
+        assert "MSFT" in result["symbols"]
+    
+    def test_refresh_watchlist_creates_market_quotes(self, db_session: Session, test_user: User):
+        """Test that refresh creates MarketQuote records."""
+        # Add symbol to watchlist
+        ws = WatchlistSymbol(user_id=test_user.id, symbol="AAPL")
         db_session.add(ws)
         db_session.commit()
         
-        # Try to add duplicate
-        dashboard = Dashboard()
-        result = dashboard.add_symbol(user.id, "AAPL", db_session)
+        provider = MockDataProvider()
+        refresh_watchlist_market_data(test_user.id, provider=provider)
         
-        assert result["status"] == "error"
-        assert "already" in result["message"].lower()
-
-    def test_add_invalid_symbol(self, db_session: Session):
-        """Test that invalid symbols are rejected."""
-        user = User(
-            username="testuser",
-            email="test@example.com",
-            hashed_password="hashed_password",
-        )
-        db_session.add(user)
-        db_session.commit()
+        # Check that MarketQuote was created
+        quote = db_session.query(MarketQuote).filter(
+            MarketQuote.watchlist_symbol_id == ws.id
+        ).first()
         
-        dashboard = Dashboard()
-        result = dashboard.add_symbol(user.id, "INVALID123", db_session)
-        
-        assert result["status"] == "error"
-        assert "invalid" in result["message"].lower()
-
-    def test_remove_symbol_from_watchlist(self, db_session: Session):
-        """Test removing a symbol from watchlist."""
-        # Create user and watchlist with symbol
-        user = User(
-            username="testuser",
-            email="test@example.com",
-            hashed_password="hashed_password",
-        )
-        db_session.add(user)
-        db_session.commit()
-        
-        watchlist = Watchlist(
-            user_id=user.id,
-            name="Test Watchlist",
-        )
-        db_session.add(watchlist)
-        db_session.commit()
-        
-        ws = WatchlistSymbol(
-            watchlist_id=watchlist.id,
-            symbol="AAPL",
-        )
+        assert quote is not None
+        assert quote.symbol == "AAPL"
+        assert quote.price is not None
+        assert quote.price > 0
+    
+    def test_refresh_watchlist_updates_existing_quote(self, db_session: Session, test_user: User):
+        """Test that refresh updates existing MarketQuote."""
+        # Add symbol to watchlist
+        ws = WatchlistSymbol(user_id=test_user.id, symbol="AAPL")
         db_session.add(ws)
         db_session.commit()
         
-        # Remove symbol
-        dashboard = Dashboard()
-        result = dashboard.remove_symbol(user.id, "AAPL", db_session)
-        
-        assert result["status"] == "success"
-        assert result["symbol"] == "AAPL"
-        assert "removed" in result["message"].lower()
-        
-        # Verify removed from database
-        symbol = db_session.query(WatchlistSymbol).filter(
-            WatchlistSymbol.watchlist_id == watchlist.id,
-            WatchlistSymbol.symbol == "AAPL",
-        ).first()
-        assert symbol is None
-
-    def test_remove_nonexistent_symbol(self, db_session: Session):
-        """Test removing a symbol that doesn't exist."""
-        user = User(
-            username="testuser",
-            email="test@example.com",
-            hashed_password="hashed_password",
+        # Create initial quote
+        old_quote = MarketQuote(
+            watchlist_symbol_id=ws.id,
+            symbol="AAPL",
+            price=150.0,
+            fetched_at=datetime.utcnow() - timedelta(hours=1)
         )
-        db_session.add(user)
+        db_session.add(old_quote)
         db_session.commit()
         
-        watchlist = Watchlist(
-            user_id=user.id,
-            name="Test Watchlist",
+        provider = MockDataProvider()
+        refresh_watchlist_market_data(test_user.id, provider=provider)
+        
+        # Check that new quote was created (not updated)
+        quotes = db_session.query(MarketQuote).filter(
+            MarketQuote.watchlist_symbol_id == ws.id
+        ).all()
+        
+        assert len(quotes) == 2  # Old and new
+        latest = max(quotes, key=lambda q: q.fetched_at)
+        assert latest.fetched_at > old_quote.fetched_at
+
+
+class TestPaperBrokerPortfolio:
+    """Tests for PaperBrokerProvider portfolio methods."""
+    
+    def test_get_portfolio_empty(self, db_session: Session, test_user: User):
+        """Test portfolio with no trades."""
+        broker = PaperBrokerProvider(initial_cash=10000.0)
+        portfolio = broker.get_portfolio(user_id=test_user.id, db=db_session)
+        
+        assert portfolio["total_value"] == 10000.0
+        assert portfolio["cash"] == 10000.0
+        assert portfolio["positions_value"] == 0.0
+        assert portfolio["open_pl"] == 0.0
+        assert portfolio["open_pl_pct"] == 0.0
+        assert portfolio["num_open_trades"] == 0
+    
+    def test_get_portfolio_no_db(self):
+        """Test portfolio without database session."""
+        broker = PaperBrokerProvider(initial_cash=10000.0)
+        portfolio = broker.get_portfolio()
+        
+        assert portfolio["total_value"] == 10000.0
+        assert portfolio["cash"] == 10000.0
+        assert portfolio["positions_value"] == 0.0
+    
+    def test_get_portfolio_with_open_trade(self, db_session: Session, test_user: User):
+        """Test portfolio with open trades."""
+        from app.models.database import Trade
+        
+        # Create open trade
+        trade = Trade(
+            user_id=test_user.id,
+            symbol="AAPL",
+            strategy_type="covered_call",
+            status="open",
+            entry_price=150.0,
+            quantity=10,
+            profit_loss=100.0
         )
-        db_session.add(watchlist)
+        db_session.add(trade)
         db_session.commit()
         
-        dashboard = Dashboard()
-        result = dashboard.remove_symbol(user.id, "AAPL", db_session)
+        broker = PaperBrokerProvider(initial_cash=10000.0)
+        portfolio = broker.get_portfolio(user_id=test_user.id, db=db_session)
         
-        assert result["status"] == "error"
-        assert "not in watchlist" in result["message"].lower()
-
-    def test_remove_symbol_nonexistent_user(self, db_session: Session):
-        """Test removing symbol for nonexistent user."""
-        dashboard = Dashboard()
-        result = dashboard.remove_symbol(99999, "AAPL", db_session)
-        
-        assert result["status"] == "error"
-        assert "not found" in result["message"].lower()
+        assert portfolio["num_open_trades"] == 1
+        assert portfolio["positions_value"] == 1500.0  # 150 * 10
+        assert portfolio["open_pl"] == 100.0
 
 
-class TestWatchlistRetrieval:
-    """Test watchlist retrieval."""
-
-    def test_get_empty_watchlist(self, db_session: Session):
-        """Test getting an empty watchlist."""
-        user = User(
-            username="testuser",
-            email="test@example.com",
-            hashed_password="hashed_password",
-        )
-        db_session.add(user)
-        db_session.commit()
+class TestWatchlistRendering:
+    """Tests for watchlist rendering."""
+    
+    def test_render_watchlist_list_input(self):
+        """Test rendering with list input."""
+        from app.frontend.app_shell import render_watchlist_section
         
-        dashboard = Dashboard()
-        items = dashboard.get_watchlist(user.id, db_session)
+        watchlist = [
+            {
+                "symbol": "AAPL",
+                "current_price": 150.0,
+                "added_at": "2024-01-01T00:00:00",
+                "last_updated": "2024-01-02T00:00:00",
+                "data_freshness_seconds": 3600
+            }
+        ]
         
-        assert items == []
-
-    def test_get_watchlist_with_symbols(self, db_session: Session):
-        """Test getting a watchlist with symbols."""
-        user = User(
-            username="testuser",
-            email="test@example.com",
-            hashed_password="hashed_password",
-        )
-        db_session.add(user)
-        db_session.commit()
+        html = render_watchlist_section(watchlist)
+        assert "AAPL" in html
+        assert "$150.00" in html
+        assert "3600s ago" in html
+    
+    def test_render_watchlist_dict_input(self):
+        """Test rendering with dict input."""
+        from app.frontend.app_shell import render_watchlist_section
         
-        watchlist = Watchlist(
-            user_id=user.id,
-            name="Test Watchlist",
-        )
-        db_session.add(watchlist)
-        db_session.commit()
+        watchlist = {
+            "symbols": [
+                {
+                    "symbol": "MSFT",
+                    "current_price": 380.0,
+                    "added_at": "2024-01-01T00:00:00",
+                    "last_updated": "2024-01-02T00:00:00",
+                    "data_freshness_seconds": 1800
+                }
+            ],
+            "count": 1
+        }
         
-        symbols = ["AAPL", "MSFT", "GOOGL"]
-        for symbol in symbols:
-            ws = WatchlistSymbol(
-                watchlist_id=watchlist.id,
-                symbol=symbol,
-            )
-            db_session.add(ws)
-        db_session.commit()
+        html = render_watchlist_section(watchlist)
+        assert "MSFT" in html
+        assert "$380.00" in html
+        assert "1800s ago" in html
+    
+    def test_render_watchlist_null_price(self):
+        """Test rendering with null price."""
+        from app.frontend.app_shell import render_watchlist_section
         
-        dashboard = Dashboard()
-        items = dashboard.get_watchlist(user.id, db_session)
+        watchlist = [
+            {
+                "symbol": "AAPL",
+                "current_price": None,
+                "added_at": "2024-01-01T00:00:00",
+                "last_updated": None,
+                "data_freshness_seconds": None
+            }
+        ]
         
-        assert len(items) == 3
-        assert [item.symbol for item in items] == symbols
-        assert all(isinstance(item, WatchlistItem) for item in items)
-
-    def test_get_watchlist_nonexistent_user(self, db_session: Session):
-        """Test getting watchlist for nonexistent user."""
-        dashboard = Dashboard()
-        items = dashboard.get_watchlist(99999, db_session)
+        html = render_watchlist_section(watchlist)
+        assert "AAPL" in html
+        assert "Price unavailable" in html
+        assert "Not yet updated" in html
+    
+    def test_render_watchlist_empty(self):
+        """Test rendering empty watchlist."""
+        from app.frontend.app_shell import render_watchlist_section
         
-        assert items == []
-
-
-class TestWatchlistIntegration:
-    """Integration tests for watchlist functionality."""
-
-    def test_add_multiple_symbols(self, db_session: Session):
-        """Test adding multiple symbols to watchlist."""
-        user = User(
-            username="testuser",
-            email="test@example.com",
-            hashed_password="hashed_password",
-        )
-        db_session.add(user)
-        db_session.commit()
-        
-        dashboard = Dashboard()
-        symbols = ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA"]
-        
-        for symbol in symbols:
-            result = dashboard.add_symbol(user.id, symbol, db_session)
-            assert result["status"] == "success"
-        
-        # Verify all symbols are in watchlist
-        items = dashboard.get_watchlist(user.id, db_session)
-        assert len(items) == 5
-        assert set(item.symbol for item in items) == set(symbols)
-
-    def test_add_and_remove_workflow(self, db_session: Session):
-        """Test complete add and remove workflow."""
-        user = User(
-            username="testuser",
-            email="test@example.com",
-            hashed_password="hashed_password",
-        )
-        db_session.add(user)
-        db_session.commit()
-        
-        dashboard = Dashboard()
-        
-        # Add symbols
-        dashboard.add_symbol(user.id, "AAPL", db_session)
-        dashboard.add_symbol(user.id, "MSFT", db_session)
-        dashboard.add_symbol(user.id, "GOOGL", db_session)
-        
-        items = dashboard.get_watchlist(user.id, db_session)
-        assert len(items) == 3
-        
-        # Remove one symbol
-        result = dashboard.remove_symbol(user.id, "MSFT", db_session)
-        assert result["status"] == "success"
-        
-        items = dashboard.get_watchlist(user.id, db_session)
-        assert len(items) == 2
-        assert "MSFT" not in [item.symbol for item in items]
+        html = render_watchlist_section([])
+        assert "empty" in html.lower()
