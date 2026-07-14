@@ -555,50 +555,72 @@ class Dashboard:
         db: Session,
         limit: int = 10,
     ) -> List[OpportunityItem]:
-        """Get top ranked opportunities for user.
-
-        Args:
-            user_id: User ID
-            db: Database session
-            limit: Maximum number of opportunities
-
-        Returns:
-            List of OpportunityItem objects sorted by score
-        """
+        """Get top ranked opportunities for user."""
         try:
-            # Get pending signals for user
-            signals = db.query(Signal).filter(
-                Signal.user_id == user_id,
-                Signal.status == "pending",
-            ).order_by(Signal.confidence.desc()).limit(limit).all()
-            
+            # Accept both app-generated pending signals and dev-generated open signals.
+            signals = (
+                db.query(Signal)
+                .filter(
+                    Signal.user_id == user_id,
+                    Signal.status.in_(["pending", "open"]),
+                )
+                .order_by(Signal.score.desc())
+                .limit(limit)
+                .all()
+            )
+
             items = []
+
             for signal in signals:
-                # Get option contract
-                contract = db.query(OptionContract).filter(
-                    OptionContract.id == signal.option_contract_id,
-                ).first()
-                
-                if contract:
-                    items.append(
-                        OpportunityItem(
-                            signal_id=signal.id,
-                            symbol=contract.symbol,
-                            strategy_type=signal.signal_type,
-                            score=signal.confidence * 100,  # Convert to 0-100
-                            expected_profit=0.0,  # Would calculate from contract
-                            max_loss=0.0,  # Would calculate from contract
-                            probability_estimate=signal.confidence,
-                            reason=signal.reason or "No reason provided",
-                            status=signal.status,
-                            created_at=signal.created_at,
-                            breakdown=None,  # Would parse from signal data
-                        )
+                contract = None
+                if signal.option_contract_id:
+                    contract = (
+                        db.query(OptionContract)
+                        .filter(OptionContract.id == signal.option_contract_id)
+                        .first()
                     )
-            
+
+                raw_score = float(signal.score or 0.0)
+                display_score = raw_score * 100.0 if raw_score <= 1.0 else raw_score
+
+                raw_probability = signal.probability_estimate
+                if raw_probability is None:
+                    probability = raw_score if raw_score <= 1.0 else raw_score / 100.0
+                else:
+                    probability = float(raw_probability)
+                    if probability > 1.0:
+                        probability = probability / 100.0
+
+                breakdown = None
+                if signal.breakdown:
+                    try:
+                        breakdown = json.loads(signal.breakdown)
+                    except Exception:
+                        breakdown = {"raw": signal.breakdown}
+
+                items.append(
+                    OpportunityItem(
+                        signal_id=signal.id,
+                        symbol=signal.symbol or (contract.symbol if contract else "UNKNOWN"),
+                        strategy_type=signal.strategy_type,
+                        score=round(display_score, 2),
+                        expected_profit=float(signal.expected_profit or 0.0),
+                        max_loss=float(signal.max_loss or 0.0),
+                        probability_estimate=round(probability, 4),
+                        reason=signal.reason or "No reason provided",
+                        status=signal.status,
+                        created_at=signal.created_at,
+                        breakdown=breakdown,
+                    )
+                )
+
             return items
+
         except Exception as e:
-            logger.error(f"Error getting top opportunities for user {user_id}: {e}", exc_info=True)
+            logger.error(
+                f"Error getting top opportunities for user {user_id}: {e}",
+                exc_info=True,
+            )
             return []
 
     def get_open_trades(
