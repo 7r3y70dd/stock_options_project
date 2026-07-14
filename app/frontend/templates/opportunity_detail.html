@@ -1,0 +1,184 @@
+{% extends "base.html" %}
+
+{% block title %}Opportunity Detail - Options Tracker{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="{{ url_for('static', path='opportunity_detail.css') }}">
+{% endblock %}
+
+{% block content %}
+<div class="opportunity-detail-container">
+  <!-- Back link -->
+  <div class="back-link-container">
+    <a href="/opportunities" class="back-link">← Back to Opportunities</a>
+  </div>
+
+  <!-- Loading state -->
+  <div id="loading-state" class="loading-state" style="display: none;">
+    <div class="spinner"></div>
+    <p>Loading opportunity details...</p>
+  </div>
+
+  <!-- Error state -->
+  <div id="error-state" class="error-state" style="display: none;">
+    <div class="error-icon">⚠️</div>
+    <h2>Error Loading Opportunity</h2>
+    <p id="error-message"></p>
+    <button onclick="location.reload()" class="btn btn-primary">Retry</button>
+  </div>
+
+  <!-- Not found state -->
+  <div id="not-found-state" class="not-found-state" style="display: none;">
+    <div class="not-found-icon">🔍</div>
+    <h2>Opportunity Not Found</h2>
+    <p>The opportunity you're looking for doesn't exist or has been removed.</p>
+    <a href="/opportunities" class="btn btn-primary">View All Opportunities</a>
+  </div>
+
+  <!-- Detail content -->
+  <div id="detail-content" style="display: none;">
+    <!-- Header section -->
+    <div class="detail-header">
+      <div class="header-top">
+        <h1 id="symbol-header">-</h1>
+        <div class="header-badges">
+          <span id="strategy-badge" class="badge badge-strategy">-</span>
+          <span id="status-badge" class="badge badge-status">-</span>
+        </div>
+      </div>
+      <p id="reason-text" class="reason-text">-</p>
+    </div>
+
+    <!-- Key metrics -->
+    <div class="metrics-grid">
+      <div class="metric-card">
+        <div class="metric-label">Score</div>
+        <div id="score-value" class="metric-value score-value">-</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Probability</div>
+        <div id="probability-value" class="metric-value">-</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Expected Profit</div>
+        <div id="profit-value" class="metric-value profit-value">-</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Max Loss</div>
+        <div id="loss-value" class="metric-value loss-value">-</div>
+      </div>
+    </div>
+
+    <!-- Contract details section -->
+    <div class="detail-section">
+      <h2 class="section-title">Contract Details</h2>
+      <div class="details-grid">
+        <div class="detail-item">
+          <span class="detail-label">Provider</span>
+          <span id="provider-value" class="detail-value">-</span>
+        </div>
+        <div class="detail-item">
+          <span class="detail-label">Quote</span>
+          <span id="quote-value" class="detail-value">-</span>
+        </div>
+        <div class="detail-item">
+          <span class="detail-label">Expiration</span>
+          <span id="expiration-value" class="detail-value">-</span>
+        </div>
+        <div class="detail-item">
+          <span class="detail-label">Strike</span>
+          <span id="strike-value" class="detail-value">-</span>
+        </div>
+        <div class="detail-item">
+          <span class="detail-label">Contract Type</span>
+          <span id="contract-type-value" class="detail-value">-</span>
+        </div>
+        <div class="detail-item">
+          <span class="detail-label">Bid</span>
+          <span id="bid-value" class="detail-value">-</span>
+        </div>
+        <div class="detail-item">
+          <span class="detail-label">Ask</span>
+          <span id="ask-value" class="detail-value">-</span>
+        </div>
+        <div class="detail-item">
+          <span class="detail-label">Mid</span>
+          <span id="mid-value" class="detail-value">-</span>
+        </div>
+        <div class="detail-item">
+          <span class="detail-label">Implied Volatility</span>
+          <span id="iv-value" class="detail-value">-</span>
+        </div>
+        <div class="detail-item">
+          <span class="detail-label">Delta</span>
+          <span id="delta-value" class="detail-value">-</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Liquidity section -->
+    <div class="detail-section">
+      <h2 class="section-title">Liquidity</h2>
+      <div class="details-grid">
+        <div class="detail-item">
+          <span class="detail-label">Volume</span>
+          <span id="volume-value" class="detail-value">-</span>
+        </div>
+        <div class="detail-item">
+          <span class="detail-label">Open Interest</span>
+          <span id="open-interest-value" class="detail-value">-</span>
+        </div>
+        <div class="detail-item">
+          <span class="detail-label">Bid/Ask Spread</span>
+          <span id="spread-value" class="detail-value">-</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Scoring section -->
+    <div class="detail-section">
+      <h2 class="section-title">Scoring & Analysis</h2>
+      <div class="scoring-content">
+        <div class="detail-item">
+          <span class="detail-label">Sentiment Score</span>
+          <span id="sentiment-value" class="detail-value">-</span>
+        </div>
+        <div class="detail-item">
+          <span class="detail-label">Scoring Note</span>
+          <span id="scoring-note-value" class="detail-value">-</span>
+        </div>
+        <div class="detail-item full-width">
+          <span class="detail-label">Full Analysis</span>
+          <p id="full-reason-value" class="detail-value full-text">-</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Metadata section -->
+    <div class="detail-section">
+      <h2 class="section-title">Metadata</h2>
+      <div class="details-grid">
+        <div class="detail-item">
+          <span class="detail-label">Signal ID</span>
+          <span id="signal-id-value" class="detail-value">-</span>
+        </div>
+        <div class="detail-item">
+          <span class="detail-label">Created</span>
+          <span id="created-at-value" class="detail-value">-</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Actions section -->
+    <div class="actions-section">
+      <button id="refresh-btn" class="btn btn-secondary" onclick="loadOpportunityDetail()">🔄 Refresh</button>
+      <button id="paper-trade-btn" class="btn btn-primary" style="display: none;" onclick="executePaperTrade()">📊 Approve as Paper Trade</button>
+      <div id="paper-trade-status" style="display: none;" class="paper-trade-status"></div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="{{ url_for('static', path='opportunity_detail.js') }}"></script>
+{% endblock %}

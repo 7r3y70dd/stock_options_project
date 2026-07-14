@@ -1,39 +1,44 @@
 """Frontend module for Options Tracker."""
 
-from fastapi import FastAPI
-from fastapi.staticfiles import StaticFiles
+from fastapi import APIRouter
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pathlib import Path
 import os
 
-# Get the directory where this file is located
-FRONTEND_DIR = Path(__file__).parent
-TEMPLATES_DIR = FRONTEND_DIR / "templates"
-STATIC_DIR = FRONTEND_DIR / "static"
+router = APIRouter()
 
-# Initialize Jinja2 templates
-templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+# Setup templates and static files
+template_dir = Path(__file__).parent / "templates"
+static_dir = Path(__file__).parent / "static"
+
+templates = Jinja2Templates(directory=str(template_dir))
 
 
-def setup_frontend(app: FastAPI) -> None:
-    """Setup frontend routes and static file serving.
-    
-    Args:
-        app: FastAPI application instance
-    """
+@router.get("/dashboard", response_class=HTMLResponse)
+async def dashboard():
+    """Render dashboard page."""
+    return templates.get_template("dashboard.html").render()
+
+
+@router.get("/opportunities", response_class=HTMLResponse)
+async def opportunities():
+    """Render opportunities list page."""
+    return templates.get_template("opportunities.html").render()
+
+
+@router.get("/opportunities/{signal_id}", response_class=HTMLResponse)
+async def opportunity_detail(signal_id: int):
+    """Render opportunity detail page."""
+    return templates.get_template("opportunity_detail.html").render(signal_id=signal_id)
+
+
+def setup_frontend(app):
+    """Setup frontend routes and static files."""
     # Mount static files
-    if STATIC_DIR.exists():
-        app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+    if static_dir.exists():
+        app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
     
-    # Dashboard route
-    @app.get("/dashboard", response_class=HTMLResponse)
-    async def dashboard():
-        """Serve the dashboard page."""
-        return templates.get_template("dashboard.html").render()
-    
-    # Opportunities route
-    @app.get("/opportunities", response_class=HTMLResponse)
-    async def opportunities():
-        """Serve the opportunities page."""
-        return templates.get_template("opportunities.html").render()
+    # Include frontend router
+    app.include_router(router)
