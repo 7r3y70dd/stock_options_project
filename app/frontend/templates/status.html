@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+
+{% block title %}System Status{% endblock %}
+
+{% block content %}
+<div class="status-container">
+  <div class="status-header">
+    <h1>System Status</h1>
+    <button id="refresh-btn" class="btn btn-primary">Refresh</button>
+  </div>
+
+  <div id="loading" class="loading-state" style="display: none;">
+    <div class="spinner"></div>
+    <p>Loading status...</p>
+  </div>
+
+  <div id="error" class="error-state" style="display: none;">
+    <div class="error-card">
+      <h2>Unable to Load Status</h2>
+      <p id="error-message"></p>
+      <button class="btn btn-secondary" onclick="location.reload()">Retry</button>
+    </div>
+  </div>
+
+  <div id="content" class="status-content" style="display: none;">
+    <div class="status-grid">
+      <div class="status-card">
+        <div class="card-header">
+          <h2>API Status</h2>
+          <div id="status-badge" class="badge badge-healthy">Healthy</div>
+        </div>
+        <div class="card-body">
+          <div class="status-item">
+            <span class="label">Service:</span>
+            <span id="service-name" class="value">—</span>
+          </div>
+          <div class="status-item">
+            <span class="label">Version:</span>
+            <span id="version" class="value">—</span>
+          </div>
+          <div class="status-item">
+            <span class="label">Backend Timestamp:</span>
+            <span id="backend-timestamp" class="value">—</span>
+          </div>
+          <div class="status-item">
+            <span class="label">Frontend Checked At:</span>
+            <span id="frontend-timestamp" class="value">—</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="status-footer">
+      <a href="/dashboard" class="btn btn-secondary">Back to Dashboard</a>
+    </div>
+  </div>
+</div>
+
+<script src="/static/status.js"></script>
+{% endblock %}
