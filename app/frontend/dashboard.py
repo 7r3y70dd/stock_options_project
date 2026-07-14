@@ -786,3 +786,51 @@ class Dashboard:
                 risk_settings=self.get_risk_settings(user_id, db),
                 timestamp=datetime.utcnow(),
             )
+
+    def update_risk_level(
+        self,
+        user_id: int,
+        risk_level: str,
+        db,
+        confirmed: bool = False,
+    ) -> dict:
+        """Update a user's risk level."""
+        from app.models.database import User
+
+        normalized_risk_level = (risk_level or "").strip().lower()
+        valid_risk_levels = {"low", "medium", "high"}
+
+        if normalized_risk_level not in valid_risk_levels:
+            return {
+                "status": "error",
+                "message": (
+                    "Invalid risk level. Expected one of: "
+                    "low, medium, high"
+                ),
+            }
+
+        if normalized_risk_level == "high" and not confirmed:
+            return {
+                "status": "confirmation_required",
+                "message": "High risk level requires explicit confirmation",
+                "risk_level": normalized_risk_level,
+                "requires_confirmation": True,
+            }
+
+        user = db.query(User).filter_by(id=user_id).first()
+        if not user:
+            return {
+                "status": "error",
+                "message": f"User {user_id} not found",
+            }
+
+        user.risk_level = normalized_risk_level
+        db.commit()
+        db.refresh(user)
+
+        return {
+            "status": "success",
+            "message": f"Risk level updated to {normalized_risk_level}",
+            "risk_level": user.risk_level,
+        }
+
