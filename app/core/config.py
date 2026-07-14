@@ -6,6 +6,16 @@ Handles environment variables and configuration for the application.
 import os
 from typing import Optional
 from dataclasses import dataclass
+from enum import Enum
+
+
+class Environment(str, Enum):
+    """Application runtime environment."""
+
+    DEVELOPMENT = "development"
+    TESTING = "testing"
+    PRODUCTION = "production"
+
 
 
 @dataclass
@@ -74,3 +84,6 @@ def get_config() -> Config:
         environment=os.getenv("ENVIRONMENT", "development"),
         debug=os.getenv("DEBUG", "false").lower() == "true",
     )
+
+# Backward-compatible singleton used by older imports.
+config = get_config()
