@@ -1,4 +1,4 @@
-"""Frontend assets and templates."""
+"""Frontend assets, templates, and components."""
 
 from app.frontend.dashboard import (
     Dashboard,
@@ -10,6 +10,8 @@ from app.frontend.dashboard import (
     NewsItem,
     RiskSettings,
 )
+from app.frontend.api_client import APIClient, APIError, get_api_client
+from app.frontend.app_shell import AppShell, AppState, LoadingState
 
 __all__ = [
     "Dashboard",
@@ -20,4 +22,10 @@ __all__ = [
     "TradeItem",
     "NewsItem",
     "RiskSettings",
+    "APIClient",
+    "APIError",
+    "get_api_client",
+    "AppShell",
+    "AppState",
+    "LoadingState",
 ]
