@@ -1,47 +1,25 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>News & Event Risk - Options Tracker</title>
-    <link rel="stylesheet" href="/static/base.css">
-    <link rel="stylesheet" href="/static/news.css">
-</head>
-<body>
-    <div id="app">
-        {% include 'header.html' %}
-        
-        <main class="main-content">
-            <div class="page-header">
-                <h1>News & Event Risk</h1>
-                <button id="refresh-btn" class="btn btn-primary">Refresh</button>
-            </div>
+{% extends "base.html" %}
 
-            <div id="loading-state" class="loading-state" style="display: none;">
-                <div class="spinner"></div>
-                <p>Loading news...</p>
-            </div>
+{% block title %}News - Options Tracker{% endblock %}
 
-            <div id="error-state" class="error-state" style="display: none;">
-                <div class="error-message">
-                    <p id="error-text"></p>
-                    <button class="btn btn-secondary" onclick="location.reload()">Retry</button>
-                </div>
-            </div>
-
-            <div id="empty-state" class="empty-state" style="display: none;">
-                <p>No recent news yet. Add watchlist symbols or refresh market data to populate news.</p>
-            </div>
-
-            <div id="news-container" class="news-container">
-                <!-- News items will be rendered here -->
-            </div>
-        </main>
-
-        {% include 'footer.html' %}
+{% block content %}
+<div id="news-page" class="news-container">
+    <div class="page-header">
+        <h1>News</h1>
+        <p>Recent market news and event-risk updates.</p>
     </div>
 
-    <script src="/static/formatters.js"></script>
-    <script src="/static/news.js"></script>
-</body>
-</html>
+    <section class="dashboard-section">
+        <h2>Recent News</h2>
+        <div id="news-container" class="news-list">
+            <div class="empty-state">
+                <p class="empty-state-text">Loading news...</p>
+            </div>
+        </div>
+    </section>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="/static/news.js"></script>
+{% endblock %}

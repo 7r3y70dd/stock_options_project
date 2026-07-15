@@ -123,6 +123,21 @@ class Config:
     def get_celery_result_backend(self) -> str:
         return self.celery_result_backend
 
+    @property
+    def VERSION(self) -> str:
+        """Backward-compatible uppercase alias for app version."""
+        return getattr(self, "version", "0.1.0")
+
+    @property
+    def APP_NAME(self) -> str:
+        """Backward-compatible uppercase alias for app name."""
+        return getattr(self, "app_name", "Options Tracker API")
+
+    @property
+    def DEBUG(self) -> bool:
+        """Backward-compatible uppercase alias for debug flag."""
+        return getattr(self, "debug", False)
+
 
 def get_config() -> Config:
     """Get application configuration from environment variables.

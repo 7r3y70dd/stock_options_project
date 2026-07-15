@@ -82,6 +82,13 @@ async def risk_settings_page(request: Request):
     return templates.TemplateResponse("risk_settings.html", {"request": request})
 
 
+
+
+@app.get("/trades", response_class=HTMLResponse)
+async def trades_page(request: Request):
+    """Render trades page."""
+    return templates.TemplateResponse("trades.html", {"request": request})
+
 @app.get("/news", response_class=HTMLResponse)
 async def news_page(request: Request):
     """News page."""

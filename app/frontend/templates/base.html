@@ -8,7 +8,7 @@
     {% block extra_css %}{% endblock %}
 </head>
 <body>
-    <div class="app-container">
+    <div id="app" class="app-container">
         <!-- Header -->
         <header class="app-header">
             <div class="header-content">
@@ -29,7 +29,7 @@
         </header>
 
         <!-- Main Content -->
-        <main class="app-main">
+        <main id="main" class="app-main">
             {% block content %}{% endblock %}
         </main>
 
