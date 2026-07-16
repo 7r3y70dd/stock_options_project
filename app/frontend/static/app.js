@@ -196,7 +196,7 @@ function updateFooterStatus(timestamp = null) {
 async function initializeApp() {
     try {
         // Check API health
-        const health = await apiRequest('/api/health');
+        const health = await apiRequest('/health');
         console.log('API health check passed:', health);
         updateFooterStatus(new Date());
     } catch (error) {

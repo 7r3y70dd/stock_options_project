@@ -46,7 +46,10 @@ services:
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/1
       CELERY_RESULT_BACKEND: redis://redis:6379/2
-      DATA_PROVIDER: yfinance
+      DATA_PROVIDER: ${DATA_PROVIDER:-marketdata}
+      MARKETDATA_TOKEN: ${MARKETDATA_TOKEN}
+      MARKETDATA_STRIKE_LIMIT: ${MARKETDATA_STRIKE_LIMIT:-10}
+      MARKETDATA_DTE: ${MARKETDATA_DTE:-30}
       YFINANCE_ENABLED: "true"
     depends_on:
       postgres:
@@ -71,7 +74,10 @@ services:
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/1
       CELERY_RESULT_BACKEND: redis://redis:6379/2
-      DATA_PROVIDER: yfinance
+      DATA_PROVIDER: ${DATA_PROVIDER:-marketdata}
+      MARKETDATA_TOKEN: ${MARKETDATA_TOKEN}
+      MARKETDATA_STRIKE_LIMIT: ${MARKETDATA_STRIKE_LIMIT:-10}
+      MARKETDATA_DTE: ${MARKETDATA_DTE:-30}
       YFINANCE_ENABLED: "true"
     depends_on:
       - postgres

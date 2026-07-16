@@ -19,17 +19,16 @@ const elements = {
   positionsContent: document.getElementById('positions-content')
 };
 
-// Event Listeners
 if (elements.refreshBtn) {
   elements.refreshBtn.addEventListener('click', loadPortfolio);
 }
 
-// Initialize on page load
-document.addEventListener('DOMContentLoaded', loadPortfolio);
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', loadPortfolio);
+} else {
+  loadPortfolio();
+}
 
-/**
- * Load portfolio data from API
- */
 async function loadPortfolio() {
   showLoading();
   hideError();
@@ -53,23 +52,35 @@ async function loadPortfolio() {
   }
 }
 
-/**
- * Render portfolio data to the page
- */
 function renderPortfolio(data) {
   if (!data) {
     showError('No portfolio data received');
     return;
   }
 
-  // Render summary cards
+  const requiredElements = [
+    'totalValue',
+    'cash',
+    'positionsValue',
+    'openPL',
+    'openPLPct',
+    'numOpenTrades',
+    'numOpenSignals',
+    'positionsContent'
+  ];
+
+  const missing = requiredElements.filter((name) => !elements[name]);
+  if (missing.length > 0) {
+    showError(`Portfolio template missing required elements: ${missing.join(', ')}`);
+    return;
+  }
+
   elements.totalValue.textContent = formatCurrency(data.total_value);
   elements.cash.textContent = formatCurrency(data.cash);
   elements.positionsValue.textContent = formatCurrency(data.positions_value);
 
-  // Render P/L with color coding
-  const openPL = data.open_pl;
-  const openPLPct = data.open_pl_pct;
+  const openPL = Number(data.open_pl || 0);
+  const openPLPct = Number(data.open_pl_pct || 0);
 
   elements.openPL.textContent = formatCurrency(openPL);
   elements.openPL.className = 'card-value ' + (openPL >= 0 ? 'positive' : 'negative');
@@ -77,20 +88,20 @@ function renderPortfolio(data) {
   elements.openPLPct.textContent = formatPercent(openPLPct);
   elements.openPLPct.className = 'card-value ' + (openPLPct >= 0 ? 'positive' : 'negative');
 
-  // Render trade stats
   elements.numOpenTrades.textContent = data.num_open_trades || 0;
   elements.numOpenSignals.textContent = data.num_open_signals || 0;
 
-  // Render positions
   renderPositions(data);
 }
 
-/**
- * Render positions section
- */
 function renderPositions(data) {
-  const positionsValue = data.positions_value || 0;
-  const numOpenTrades = data.num_open_trades || 0;
+  const positionsValue = Number(data.positions_value || 0);
+  const numOpenTrades = Number(data.num_open_trades || 0);
+
+  if (data.positions && Array.isArray(data.positions) && data.positions.length > 0) {
+    renderPositionsTable(data.positions);
+    return;
+  }
 
   if (positionsValue === 0 && numOpenTrades === 0) {
     elements.positionsContent.innerHTML = `
@@ -99,24 +110,16 @@ function renderPositions(data) {
         <p>Approve an opportunity as a paper trade to begin tracking a position.</p>
       </div>
     `;
-  } else {
-    // Placeholder for future positions table
-    // When the backend provides positions array, render it here
-    if (data.positions && Array.isArray(data.positions) && data.positions.length > 0) {
-      renderPositionsTable(data.positions);
-    } else {
-      elements.positionsContent.innerHTML = `
-        <div class="empty-positions">
-          <p>No position details available.</p>
-        </div>
-      `;
-    }
+    return;
   }
+
+  elements.positionsContent.innerHTML = `
+    <div class="empty-positions">
+      <p>No position details available yet.</p>
+    </div>
+  `;
 }
 
-/**
- * Render positions table (for future use when positions endpoint is available)
- */
 function renderPositionsTable(positions) {
   const rows = positions.map(pos => `
     <tr>
@@ -145,43 +148,35 @@ function renderPositionsTable(positions) {
           <th>Open P/L %</th>
         </tr>
       </thead>
-      <tbody>
-        ${rows}
-      </tbody>
+      <tbody>${rows}</tbody>
     </table>
   `;
 }
 
-/**
- * Format currency value
- */
 function formatCurrency(value) {
-  if (value === null || value === undefined) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) {
     return 'N/A';
   }
+
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
     currency: 'USD',
     minimumFractionDigits: 2,
     maximumFractionDigits: 2
-  }).format(value);
+  }).format(Number(value));
 }
 
-/**
- * Format percentage value
- */
 function formatPercent(value) {
-  if (value === null || value === undefined) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) {
     return 'N/A';
   }
-  return (value * 100).toFixed(2) + '%';
+
+  return Number(value).toFixed(2) + '%';
 }
 
-/**
- * Escape HTML special characters
- */
 function escapeHtml(text) {
   if (!text) return '';
+
   const map = {
     '&': '&amp;',
     '<': '&lt;',
@@ -189,42 +184,66 @@ function escapeHtml(text) {
     '"': '&quot;',
     "'": '&#039;'
   };
+
   return String(text).replace(/[&<>"']/g, m => map[m]);
 }
 
-/**
- * Show loading state
- */
 function showLoading() {
-  if (elements.loading) elements.loading.style.display = 'flex';
-  if (elements.error) elements.error.style.display = 'none';
-  if (elements.content) elements.content.style.display = 'none';
+  if (elements.loading) {
+    elements.loading.classList.remove('hidden');
+    elements.loading.style.display = 'flex';
+  }
+
+  if (elements.error) {
+    elements.error.classList.add('hidden');
+    elements.error.style.display = 'none';
+  }
+
+  if (elements.content) {
+    elements.content.style.display = 'none';
+  }
 }
 
-/**
- * Show content
- */
 function showContent() {
-  if (elements.loading) elements.loading.style.display = 'none';
-  if (elements.error) elements.error.style.display = 'none';
-  if (elements.content) elements.content.style.display = 'block';
+  if (elements.loading) {
+    elements.loading.classList.add('hidden');
+    elements.loading.style.display = 'none';
+  }
+
+  if (elements.error) {
+    elements.error.classList.add('hidden');
+    elements.error.style.display = 'none';
+  }
+
+  if (elements.content) {
+    elements.content.classList.remove('hidden', 'loading', 'd-none');
+    elements.content.style.display = 'block';
+  }
 }
 
-/**
- * Show error state
- */
 function showError(message) {
-  if (elements.loading) elements.loading.style.display = 'none';
-  if (elements.error) elements.error.style.display = 'block';
-  if (elements.content) elements.content.style.display = 'none';
+  if (elements.loading) {
+    elements.loading.classList.add('hidden');
+    elements.loading.style.display = 'none';
+  }
+
+  if (elements.error) {
+    elements.error.classList.remove('hidden');
+    elements.error.style.display = 'block';
+  }
+
+  if (elements.content) {
+    elements.content.style.display = 'none';
+  }
+
   if (elements.errorMessage) {
     elements.errorMessage.textContent = message || 'An error occurred while loading portfolio data';
   }
 }
 
-/**
- * Hide error state
- */
 function hideError() {
-  if (elements.error) elements.error.style.display = 'none';
+  if (elements.error) {
+    elements.error.classList.add('hidden');
+    elements.error.style.display = 'none';
+  }
 }

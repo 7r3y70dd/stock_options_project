@@ -56,9 +56,19 @@ def get_provider():
 
         return FinnhubProvider()
 
+    if DATA_PROVIDER in {"polygon", "polygonio", "polygon_io"}:
+        from app.data_sources.polygon_provider import PolygonProvider
+
+        return PolygonProvider()
+
+    if DATA_PROVIDER in {"marketdata", "marketdata_app", "market_data"}:
+        from app.data_sources.marketdata_provider import MarketDataProvider
+
+        return MarketDataProvider()
+
     raise SystemExit(
         f"Unknown DATA_PROVIDER={DATA_PROVIDER!r}. "
-        "Use mock, yfinance, alpha_vantage, or finnhub."
+        "Use mock, yfinance, alpha_vantage, finnhub, polygon, or marketdata."
     )
 
 

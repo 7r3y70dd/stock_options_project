@@ -285,3 +285,96 @@ function formatStrategyName(strategy) {
     .map(word => word.charAt(0).toUpperCase() + word.slice(1))
     .join(' ');
 }
+
+
+// --- strategy filter controls ---
+(function () {
+  async function loadStrategyFilters() {
+    const response = await fetch('/api/api/dashboard/strategy-filters?user_id=1');
+    const settings = await response.json();
+
+    let host =
+      document.querySelector('.risk-settings-container') ||
+      document.querySelector('.container') ||
+      document.querySelector('main') ||
+      document.body;
+
+    if (document.getElementById('strategy-filters-card')) return;
+
+    const card = document.createElement('div');
+    card.id = 'strategy-filters-card';
+    card.className = 'card';
+    card.style.marginTop = '20px';
+
+    card.innerHTML = `
+      <h2>Strategy / Scan Filters</h2>
+
+      <label>Enabled strategies, comma-separated</label>
+      <input id="filter-enabled-strategies" value="${(settings.enabled_strategies || []).join(',')}" />
+
+      <label>Max signals per symbol</label>
+      <input id="filter-max-signals" type="number" value="${settings.max_signals_per_symbol || 2}" />
+
+      <label>DTE target</label>
+      <input id="filter-dte" type="number" value="${settings.dte || 30}" />
+
+      <label>Strike limit</label>
+      <input id="filter-strike-limit" type="number" value="${settings.strike_limit || 10}" />
+
+      <label>Min volume</label>
+      <input id="filter-min-volume" type="number" value="${settings.min_volume || 50}" />
+
+      <label>Min open interest</label>
+      <input id="filter-min-oi" type="number" value="${settings.min_open_interest || 250}" />
+
+      <label>Max bid/ask spread %</label>
+      <input id="filter-max-spread" type="number" value="${settings.max_bid_ask_spread_pct || 15}" />
+
+      <label>Min score</label>
+      <input id="filter-min-score" type="number" value="${settings.min_score || 0}" />
+
+      <label>Max loss %</label>
+      <input id="filter-max-loss-pct" type="number" value="${settings.max_loss_pct || 2}" />
+
+      <button id="save-strategy-filters-btn" class="btn btn-primary">Save Strategy Filters</button>
+      <div id="strategy-filters-status"></div>
+    `;
+
+    host.appendChild(card);
+
+    document.getElementById('save-strategy-filters-btn').addEventListener('click', saveStrategyFilters);
+  }
+
+  async function saveStrategyFilters() {
+    const status = document.getElementById('strategy-filters-status');
+    status.textContent = 'Saving...';
+
+    const body = {
+      enabled_strategies: document.getElementById('filter-enabled-strategies').value
+        .split(',')
+        .map(s => s.trim())
+        .filter(Boolean),
+      max_signals_per_symbol: Number(document.getElementById('filter-max-signals').value),
+      dte: Number(document.getElementById('filter-dte').value),
+      strike_limit: Number(document.getElementById('filter-strike-limit').value),
+      min_volume: Number(document.getElementById('filter-min-volume').value),
+      min_open_interest: Number(document.getElementById('filter-min-oi').value),
+      max_bid_ask_spread_pct: Number(document.getElementById('filter-max-spread').value),
+      min_score: Number(document.getElementById('filter-min-score').value),
+      max_loss_pct: Number(document.getElementById('filter-max-loss-pct').value)
+    };
+
+    const response = await fetch('/api/api/dashboard/strategy-filters/update?user_id=1', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body)
+    });
+
+    const data = await response.json();
+    status.textContent = response.ok ? 'Saved.' : JSON.stringify(data);
+  }
+
+  document.addEventListener('DOMContentLoaded', () => {
+    setTimeout(loadStrategyFilters, 250);
+  });
+})();

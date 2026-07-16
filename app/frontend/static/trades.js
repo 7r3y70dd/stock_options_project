@@ -4,70 +4,137 @@ let currentUserId = 1;
 let tradesData = [];
 let currentTradeForClose = null;
 
-// Initialize page
+function el(id) {
+  return document.getElementById(id);
+}
+
+function setDisplay(id, value) {
+  const node = el(id);
+  if (node) node.style.display = value;
+}
+
 document.addEventListener('DOMContentLoaded', function() {
+  console.log('[trades.js] loaded');
+
   const userIdParam = new URLSearchParams(window.location.search).get('user_id');
   if (userIdParam) {
-    currentUserId = parseInt(userIdParam);
+    currentUserId = parseInt(userIdParam, 10);
   }
 
-  document.getElementById('refresh-btn').addEventListener('click', loadTrades);
+  const refreshBtn = el('refresh-btn');
+  if (refreshBtn) {
+    refreshBtn.addEventListener('click', refreshTrades);
+  } else {
+    console.error('[trades.js] Missing #refresh-btn');
+  }
+
   loadTrades();
 });
 
-// Load trades data
-async function loadTrades() {
+async function refreshTrades() {
   showLoadingState();
   hideErrorState();
-  hideEmptyState();
-  hideTradesContent();
 
   try {
-    const response = await fetch(`/api/api/dashboard/?user_id=${currentUserId}`);
+    const response = await fetch(`/api/api/dashboard/trades/mark-to-market?user_id=${currentUserId}`, {
+      method: 'POST'
+    });
+
     if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
+      const text = await response.text();
+      throw new Error(`Mark-to-market failed: HTTP ${response.status}: ${text.slice(0, 300)}`);
     }
 
-    const result = await response.json();
-    const data = result.data || result;
-
-    tradesData = data.open_trades || [];
-
-    hideLoadingState();
-
-    if (tradesData.length === 0) {
-      showEmptyState();
-    } else {
-      renderTrades();
-      showTradesContent();
-    }
+    await loadTrades();
   } catch (error) {
     hideLoadingState();
     showErrorState(extractErrorMessage(error));
   }
 }
 
-// Render trades table
+async function loadTrades() {
+  console.log('[trades.js] loading trades for user', currentUserId);
+
+  showLoadingState();
+  hideErrorState();
+  hideEmptyState();
+  hideTradesContent();
+
+  try {
+    const url = `/api/api/dashboard/trades/open-marked?user_id=${currentUserId}`;
+    console.log('[trades.js] fetch', url);
+
+    const response = await fetch(url, { cache: 'no-store' });
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`HTTP ${response.status}: ${text.slice(0, 300)}`);
+    }
+
+    const result = await response.json();
+    console.log('[trades.js] API result', result);
+
+    tradesData =
+      result.trades ||
+      result.open_trades ||
+      result.data?.trades ||
+      result.data?.open_trades ||
+      [];
+
+    console.log('[trades.js] parsed trades count', tradesData.length);
+
+    hideLoadingState();
+
+    if (!Array.isArray(tradesData) || tradesData.length === 0) {
+      showEmptyState();
+      return;
+    }
+
+    renderTrades();
+    showTradesContent();
+  } catch (error) {
+    console.error('[trades.js] load failed', error);
+    hideLoadingState();
+    showErrorState(extractErrorMessage(error));
+  }
+}
+
 function renderTrades() {
-  const tbody = document.getElementById('trades-tbody');
+  const tbody = el('trades-tbody');
+
+  if (!tbody) {
+    console.error('[trades.js] Missing #trades-tbody');
+    showErrorState('Trades table body is missing from the page.');
+    return;
+  }
+
   tbody.innerHTML = '';
 
   tradesData.forEach(trade => {
+    const tradeId = trade.trade_id || trade.id || 'N/A';
+    const pl = firstDefined(trade.current_pl, trade.open_pl, trade.unrealized_pl);
+    const plPct = firstDefined(trade.current_pl_pct, trade.open_pl_pct, trade.unrealized_pl_pct);
+    const currentPrice = firstDefined(
+      trade.current_price,
+      trade.current_option_price,
+      trade.mark_price
+    );
+
     const row = document.createElement('tr');
     row.innerHTML = `
-      <td>${escapeHtml(trade.trade_id || 'N/A')}</td>
+      <td>${escapeHtml(tradeId)}</td>
       <td><strong>${escapeHtml(trade.symbol || 'N/A')}</strong></td>
       <td>${escapeHtml(formatStrategyType(trade.strategy_type))}</td>
       <td>${formatCurrency(trade.entry_price)}</td>
-      <td>${formatCurrency(trade.current_price)}</td>
-      <td>${trade.quantity || 'N/A'}</td>
-      <td>${formatDate(trade.entry_date)}</td>
-      <td class="${getPlClass(trade.current_pl)}">${formatCurrency(trade.current_pl)}</td>
-      <td class="${getPlClass(trade.current_pl_pct)}">${formatPercent(trade.current_pl_pct)}</td>
-      <td><span class="status-badge ${trade.status || 'open'}">${escapeHtml(trade.status || 'open')}</span></td>
+      <td>${formatCurrency(currentPrice)}</td>
+      <td>${escapeHtml(trade.quantity || 'N/A')}</td>
+      <td>${formatDate(trade.entry_date || trade.opened_at)}</td>
+      <td class="${getPlClass(pl)}">${formatCurrency(pl)}</td>
+      <td class="${getPlClass(plPct)}">${formatPercent(plPct)}</td>
+      <td><span class="status-badge ${escapeHtml(trade.status || 'open')}">${escapeHtml(trade.status || 'open')}</span></td>
       <td>
         <div class="trade-actions">
-          <button class="btn-close-trade" onclick="openCloseTradeModal(${trade.trade_id}, '${escapeHtml(trade.symbol)}')" title="Close this trade">Close</button>
+          <a class="btn btn-secondary" href="/trades/${Number(tradeId) || 0}" title="View this trade">View</a>\n          <button class="btn-close-trade" onclick="openCloseTradeModal(${Number(tradeId) || 0}, '${escapeHtml(trade.symbol || '')}')" title="Close this trade">Close</button>
         </div>
       </td>
     `;
@@ -75,48 +142,57 @@ function renderTrades() {
   });
 }
 
-// Format strategy type for display
+function firstDefined(...values) {
+  for (const value of values) {
+    if (value !== null && value !== undefined) return value;
+  }
+  return null;
+}
+
 function formatStrategyType(strategyType) {
   if (!strategyType) return 'N/A';
-  return strategyType
+  return String(strategyType)
     .split('_')
     .map(word => word.charAt(0).toUpperCase() + word.slice(1))
     .join(' ');
 }
 
-// Get CSS class for P/L display
 function getPlClass(value) {
-  if (value === null || value === undefined) return 'pl-neutral';
-  if (typeof value === 'number') {
-    return value > 0 ? 'pl-positive' : value < 0 ? 'pl-negative' : 'pl-neutral';
-  }
-  return 'pl-neutral';
+  const n = Number(value);
+  if (value === null || value === undefined || Number.isNaN(n)) return 'pl-neutral';
+  return n > 0 ? 'pl-positive' : n < 0 ? 'pl-negative' : 'pl-neutral';
 }
 
-// Format currency
 function formatCurrency(value) {
-  if (value === null || value === undefined) return 'Not available';
+  const n = Number(value);
+  if (value === null || value === undefined || Number.isNaN(n)) return 'Not available';
+
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
     currency: 'USD',
     minimumFractionDigits: 2,
     maximumFractionDigits: 2
-  }).format(value);
+  }).format(n);
 }
 
-// Format percentage
 function formatPercent(value) {
-  if (value === null || value === undefined) return 'Not available';
-  const sign = value > 0 ? '+' : '';
-  return sign + value.toFixed(2) + '%';
+  const n = Number(value);
+  if (value === null || value === undefined || Number.isNaN(n)) return 'Not available';
+
+  // Backend may return decimal like -0.004 or percent-like value like -0.4.
+  const pct = Math.abs(n) <= 1 ? n * 100 : n;
+  const sign = pct > 0 ? '+' : '';
+  return sign + pct.toFixed(2) + '%';
 }
 
-// Format date
 function formatDate(dateString) {
   if (!dateString) return 'Not available';
+
   try {
     const date = new Date(dateString);
-    return date.toLocaleDateString('en-US', {
+    if (Number.isNaN(date.getTime())) return 'Invalid date';
+
+    return date.toLocaleString('en-US', {
       year: 'numeric',
       month: 'short',
       day: 'numeric',
@@ -128,9 +204,9 @@ function formatDate(dateString) {
   }
 }
 
-// Escape HTML to prevent XSS
 function escapeHtml(text) {
-  if (!text) return '';
+  if (text === null || text === undefined) return '';
+
   const map = {
     '&': '&amp;',
     '<': '&lt;',
@@ -138,77 +214,94 @@ function escapeHtml(text) {
     '"': '&quot;',
     "'": '&#039;'
   };
+
   return String(text).replace(/[&<>"']/g, m => map[m]);
 }
 
-// Extract error message from various error formats
 function extractErrorMessage(error) {
-  if (error.message) return error.message;
+  if (error && error.message) return error.message;
   if (typeof error === 'string') return error;
   return 'Failed to load trades. Please try again.';
 }
 
-// UI State Management
 function showLoadingState() {
-  document.getElementById('loading-state').style.display = 'flex';
+  setDisplay('loading-state', 'flex');
 }
 
 function hideLoadingState() {
-  document.getElementById('loading-state').style.display = 'none';
+  setDisplay('loading-state', 'none');
 }
 
 function showErrorState(message) {
-  const errorDiv = document.getElementById('error-state');
-  document.querySelector('.error-message').textContent = message;
-  errorDiv.style.display = 'block';
+  const errorDiv = el('error-state');
+  const errorMessage = document.querySelector('.error-message') || el('error-message');
+
+  if (errorMessage) {
+    errorMessage.textContent = message;
+  }
+
+  if (errorDiv) {
+    errorDiv.style.display = 'block';
+  } else {
+    alert(message);
+  }
 }
 
 function hideErrorState() {
-  document.getElementById('error-state').style.display = 'none';
+  setDisplay('error-state', 'none');
 }
 
 function showEmptyState() {
-  document.getElementById('empty-state').style.display = 'block';
+  setDisplay('empty-state', 'block');
 }
 
 function hideEmptyState() {
-  document.getElementById('empty-state').style.display = 'none';
+  setDisplay('empty-state', 'none');
 }
 
 function showTradesContent() {
-  document.getElementById('trades-content').style.display = 'block';
+  setDisplay('trades-content', 'block');
 }
 
 function hideTradesContent() {
-  document.getElementById('trades-content').style.display = 'none';
+  setDisplay('trades-content', 'none');
 }
 
-// Close Trade Modal
 function openCloseTradeModal(tradeId, symbol) {
   currentTradeForClose = { tradeId, symbol };
-  document.getElementById('modal-trade-id').textContent = tradeId;
-  document.getElementById('modal-symbol').textContent = symbol;
-  document.getElementById('exit-price').value = '';
-  document.getElementById('close-trade-modal').style.display = 'flex';
+
+  const modalTradeId = el('modal-trade-id');
+  const modalSymbol = el('modal-symbol');
+  const exitPrice = el('exit-price');
+  const modal = el('close-trade-modal');
+
+  if (modalTradeId) modalTradeId.textContent = tradeId;
+  if (modalSymbol) modalSymbol.textContent = symbol;
+  if (exitPrice) exitPrice.value = '';
+  if (modal) modal.style.display = 'flex';
 }
 
 function closeModal() {
-  document.getElementById('close-trade-modal').style.display = 'none';
+  setDisplay('close-trade-modal', 'none');
   currentTradeForClose = null;
 }
 
 async function confirmCloseTrade() {
   if (!currentTradeForClose) return;
 
-  const exitPrice = parseFloat(document.getElementById('exit-price').value);
-  if (isNaN(exitPrice) || exitPrice <= 0) {
+  const exitPriceInput = el('exit-price');
+  const exitPrice = parseFloat(exitPriceInput?.value);
+
+  if (Number.isNaN(exitPrice) || exitPrice <= 0) {
     alert('Please enter a valid exit price.');
     return;
   }
 
-  const confirmBtn = document.getElementById('confirm-close-btn');
-  confirmBtn.disabled = true;
-  confirmBtn.textContent = 'Closing...';
+  const confirmBtn = el('confirm-close-btn');
+  if (confirmBtn) {
+    confirmBtn.disabled = true;
+    confirmBtn.textContent = 'Closing...';
+  }
 
   try {
     const response = await fetch(
@@ -226,14 +319,16 @@ async function confirmCloseTrade() {
     loadTrades();
   } catch (error) {
     alert('Failed to close trade: ' + extractErrorMessage(error));
-    confirmBtn.disabled = false;
-    confirmBtn.textContent = 'Close Trade';
+
+    if (confirmBtn) {
+      confirmBtn.disabled = false;
+      confirmBtn.textContent = 'Close Trade';
+    }
   }
 }
 
-// Close modal when clicking outside
 window.addEventListener('click', function(event) {
-  const modal = document.getElementById('close-trade-modal');
+  const modal = el('close-trade-modal');
   if (event.target === modal) {
     closeModal();
   }

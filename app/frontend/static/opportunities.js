@@ -294,3 +294,61 @@ if (document.readyState === 'loading') {
 } else {
   initOpportunitiesPage();
 }
+
+
+// --- analyze watchlist from opportunities ---
+(function () {
+  async function analyzeWatchlistFromOpportunities() {
+    const btn = document.getElementById('analyze-opportunities-btn');
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = 'Analyzing...';
+    }
+
+    try {
+      const response = await fetch('/api/api/dashboard/watchlist/analyze?user_id=1', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({})
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || data.success === false) {
+        throw new Error(data.detail || data.stderr || 'Analyze failed');
+      }
+
+      alert(`Analyzed ${data.symbols_analyzed.length} symbols. Created about ${data.signals_created_estimate} new signals.`);
+
+      if (typeof loadOpportunities === 'function') {
+        loadOpportunities();
+      } else {
+        window.location.reload();
+      }
+    } catch (error) {
+      alert(`Analyze Watchlist failed: ${error.message}`);
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = 'Analyze Watchlist';
+      }
+    }
+  }
+
+  function installAnalyzeButton() {
+    if (document.getElementById('analyze-opportunities-btn')) return;
+
+    const refresh = document.getElementById('refresh-btn');
+    if (!refresh || !refresh.parentElement) return;
+
+    const btn = document.createElement('button');
+    btn.id = 'analyze-opportunities-btn';
+    btn.className = 'btn btn-secondary';
+    btn.textContent = 'Analyze Watchlist';
+    btn.addEventListener('click', analyzeWatchlistFromOpportunities);
+
+    refresh.parentElement.appendChild(btn);
+  }
+
+  document.addEventListener('DOMContentLoaded', installAnalyzeButton);
+})();
