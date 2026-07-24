@@ -12,7 +12,7 @@ Options Tracker allows users to:
 - **Watchlist Management**: Create and manage stock watchlists with current pricing and data freshness tracking
 - **Options Analysis**: Fetch and analyze options chains with risk-scored opportunities
 - **Strategy Scoring**: Score opportunities based on risk, liquidity, volatility, and news sentiment
-- **Risk Management**: Choose risk levels (low, medium, high) with configurable guardrails
+- **Risk Management**: Choose risk levels (low, medium, high) with configurable guardrails and kill switch
 - **Paper Trading**: Test strategies without risking real money (default mode)
 - **Backtesting**: Backtest covered calls and other strategies using VectorBT
 - **News Integration**: Pull relevant stock news with sentiment analysis
@@ -23,13 +23,43 @@ Options Tracker allows users to:
 
 - **Backend Framework**: FastAPI (async, typed, auto-docs)
 - **Web Server**: Uvicorn
+- **Frontend**: Server-rendered HTML with Jinja2 templates and static assets
 - **Database**: PostgreSQL 13+
 - **Cache**: Redis 6+
 - **Task Queue**: Celery with Redis broker
 - **Backtesting**: VectorBT (vectorized, high-performance)
 - **Data Sources**: yfinance, Alpha Vantage, Polygon, Finnhub
 - **Testing**: pytest with async support
-- **Frontend**: Python-based rendering with structured data output
+
+## Web Interface
+
+The application provides a server-rendered HTML interface with the following pages:
+
+- **`/` or `/dashboard`**: Main dashboard with portfolio summary, watchlist, top opportunities, open trades, recent news, and risk settings
+- **`/opportunities`**: Browse all available trading opportunities with filtering and sorting
+- **`/opportunities/{signal_id}`**: Detailed view of a specific opportunity with full analysis
+- **`/portfolio`**: Portfolio overview with positions, cash, and performance metrics
+- **`/watchlist`**: Manage watchlist symbols with add/remove functionality
+- **`/trades`**: View all open and closed trades with P&L tracking
+- **`/trades/{trade_id}`**: Detailed view of a specific trade with Greeks and exit rules
+- **`/risk-settings`**: Configure risk level (low/medium/high) and trading mode
+- **`/news`**: Recent news articles with sentiment analysis and event classification
+- **`/status`**: System status and health monitoring
+- **`/backtests`**: Backtesting interface for strategy evaluation
+
+## Frontend Architecture
+
+The frontend uses server-rendered HTML with:
+
+- **Templates**: Jinja2 templates in `app/frontend/templates/`
+  - `base.html`: Shared layout with navigation and styling
+  - Page-specific templates: `dashboard.html`, `opportunities.html`, `portfolio.html`, etc.
+- **Static Assets**: CSS and JavaScript in `app/frontend/static/`
+  - `app.css`: Global styles
+  - `app.js`: Shared JavaScript utilities
+  - Page-specific assets: `dashboard.js`, `opportunities.js`, etc.
+- **API Communication**: JavaScript fetches data from REST API endpoints
+- **No Build Step**: Pure HTML/CSS/JS, no Node.js or bundler required
 
 ## Project Structure
 
@@ -38,21 +68,22 @@ options-tracker/
 ├── app/
 │   ├── api/                     # REST API endpoints
 │   │   ├── dashboard.py         # Dashboard aggregation endpoints
-│   │   └── health.py            # Health check endpoint
+│   │   ├── health.py            # Health check endpoint
+│   │   └── dev_workflows.py     # Development workflow endpoints
 │   ├── core/                    # Core application logic
 │   │   ├── config.py            # Configuration management
 │   │   ├── database.py          # Database connection and session
 │   │   ├── error_handling.py    # Error handling utilities
-│   │   ├── main.py              # Application entry point
+│   │   ├── main.py              # Application entry point with routes
 │   │   ├── broker_provider.py   # Live broker integration
 │   │   ├── paper_broker_provider.py  # Paper trading broker
 │   │   ├── celery.py            # Celery configuration
+│   │   ├── scoring.py           # Signal scoring logic
 │   │   └── seed.py              # Database seeding
 │   ├── data_sources/            # External data fetching
 │   │   ├── data_provider.py     # Abstract data provider interface
 │   │   ├── yfinance_provider.py # Yahoo Finance data source
 │   │   ├── alpha_vantage_provider.py  # Alpha Vantage data source
-│   │   ├── polygon_provider.py  # Polygon data source
 │   │   ├── finnhub_provider.py  # Finnhub data source
 │   │   └── mock_provider.py     # Mock data for testing
 │   ├── models/                  # Data models and schemas
@@ -81,6 +112,22 @@ options-tracker/
 │   │   ├── celery_app.py        # Celery app configuration
 │   │   └── tasks.py             # Celery task definitions
 │   └── frontend/                # Frontend rendering
+│       ├── templates/           # Jinja2 HTML templates
+│       │   ├── base.html        # Shared layout
+│       │   ├── dashboard.html   # Dashboard page
+│       │   ├── opportunities.html # Opportunities list
+│       │   ├── opportunity_detail.html # Opportunity detail
+│       │   ├── portfolio.html   # Portfolio page
+│       │   ├── watchlist.html   # Watchlist page
+│       │   ├── trades.html      # Trades list
+│       │   ├── trade_detail.html # Trade detail
+│       │   ├── risk_settings.html # Risk settings
+│       │   ├── news.html        # News page
+│       │   └── status.html      # Status page
+│       ├── static/              # Static assets (CSS, JS)
+│       │   ├── app.css          # Global styles
+│       │   ├── app.js           # Shared utilities
+│       │   └── *.js             # Page-specific scripts
 │       ├── api_client.py        # API client for backend communication
 │       ├── app_shell.py         # Main app shell and layout
 │       ├── dashboard.py         # Dashboard service
@@ -96,7 +143,8 @@ options-tracker/
 │   ├── test_database.py         # Database tests
 │   ├── test_options_service.py  # Options service tests
 │   ├── test_scoring.py          # Scoring tests
-│   └── test_strategies.py       # Strategy tests
+│   ├── test_strategies.py       # Strategy tests
+│   └── test_trade_manager.py    # Trade manager tests
 ├── docker-compose.yml           # Docker Compose configuration
 ├── Dockerfile                   # Docker image definition
 ├── .env.example                 # Environment variables template
@@ -147,6 +195,7 @@ The backtesting engine uses **VectorBT** for high-performance strategy testing:
 - Equity curve and performance metrics
 - Trade-by-trade analysis
 - Support for covered calls and other simple strategies
+- Day-by-day replay to avoid look-ahead bias
 
 See `app/backtesting/DECISION.md` for detailed rationale and limitations.
 
@@ -156,6 +205,11 @@ See `app/backtesting/DECISION.md` for detailed rationale and limitations.
 - **Position Sizing**: Maximum position size as % of portfolio
 - **Loss Limits**: Maximum loss per trade and daily loss limits
 - **Strategy Restrictions**: Different strategies allowed per risk level
+  - Low: covered_call, cash_secured_put
+  - Medium: + debit_spread, credit_spread
+  - High: + long_call, long_put
+- **Liquidity Thresholds**: Volume, open interest, and bid-ask spread limits
+- **Kill Switch**: Emergency trading halt with optional position closure
 - **Paper Trading**: Default safe mode for testing
 - **Live Trading**: Requires explicit user approval and validation
 
@@ -193,7 +247,7 @@ See `app/backtesting/DECISION.md` for detailed rationale and limitations.
 
 4. **Verify the app is running**
    ```bash
-   curl http://localhost:8000/health
+   curl http://localhost:8000/api/health
    ```
    Expected response:
    ```json
@@ -205,8 +259,9 @@ See `app/backtesting/DECISION.md` for detailed rationale and limitations.
    }
    ```
 
-5. **Access API documentation**
-   - Swagger UI: http://localhost:8000/docs
+5. **Access the application**
+   - Web Interface: http://localhost:8000
+   - API Documentation: http://localhost:8000/docs
    - ReDoc: http://localhost:8000/redoc
 
 6. **View logs**
@@ -257,7 +312,7 @@ See `app/backtesting/DECISION.md` for detailed rationale and limitations.
 
 8. **Run the application** (in a separate terminal)
    ```bash
-   python -m app.core.main
+   uvicorn app.core.main:app --reload --host 0.0.0.0 --port 8000
    ```
    The app will start on http://localhost:8000
 
@@ -284,12 +339,13 @@ python -m pytest tests/test_backtesting.py -v
 
 **Paper Trading Mode** (default, safe for testing):
 ```bash
-python -m app.core.main --mode paper
+python -m uvicorn app.core.main:app --reload
 ```
 
 **Live Trading Mode** (requires explicit user approval):
 ```bash
-python -m app.core.main --mode live --approve-live-trading
+python -m uvicorn app.core.main:app --reload
+# Note: Live trading must be enabled in risk settings UI
 ```
 
 ## API Endpoints
@@ -297,7 +353,7 @@ python -m app.core.main --mode live --approve-live-trading
 ### Health Check
 
 ```
-GET /health
+GET /api/health
 ```
 
 Returns the health status of the application.
@@ -314,236 +370,280 @@ Returns the health status of the application.
 
 ### Dashboard Endpoints
 
+#### Get Complete Dashboard Data
+
 ```
-GET /api/api/dashboard/?user_id={user_id}
+GET /api/api/dashboard/?user_id={user_id}&watchlist_id={watchlist_id}
 ```
 
-Get complete dashboard data including portfolio, watchlist, opportunities, trades, news, and risk settings.
+Returns complete dashboard data including portfolio, watchlist, opportunities, trades, news, and risk settings.
+
+**Parameters:**
+- `user_id` (required): User ID
+- `watchlist_id` (optional): Specific watchlist ID
+
+**Response:**
+```json
+{
+  "portfolio_summary": {
+    "total_value": 105000.0,
+    "cash": 95000.0,
+    "positions_value": 10000.0,
+    "open_pl": 500.0,
+    "open_pl_pct": 5.0,
+    "num_open_trades": 3,
+    "num_open_signals": 5
+  },
+  "watchlist": [...],
+  "top_opportunities": [...],
+  "open_trades": [...],
+  "recent_news": [...],
+  "risk_settings": {...},
+  "timestamp": "2024-01-15T10:30:45.123456"
+}
+```
+
+#### Get Portfolio Summary
 
 ```
 GET /api/api/dashboard/portfolio?user_id={user_id}
 ```
 
-Get portfolio summary (total value, cash, positions, P&L).
+#### Get Watchlist
 
 ```
-GET /api/api/dashboard/watchlist?user_id={user_id}
+GET /api/api/dashboard/watchlist?user_id={user_id}&watchlist_id={watchlist_id}
 ```
 
-Get user's watchlist with current prices and data freshness.
+#### Add Symbol to Watchlist
 
 ```
-POST /api/api/dashboard/watchlist/add?user_id={user_id}&symbol={symbol}
+POST /api/api/dashboard/watchlist/add?user_id={user_id}&symbol={symbol}&watchlist_id={watchlist_id}
 ```
 
-Add a symbol to watchlist.
+#### Remove Symbol from Watchlist
 
 ```
-POST /api/api/dashboard/watchlist/remove?user_id={user_id}&symbol={symbol}
+POST /api/api/dashboard/watchlist/remove?user_id={user_id}&symbol={symbol}&watchlist_id={watchlist_id}
 ```
 
-Remove a symbol from watchlist.
+#### Validate Symbol
 
 ```
 POST /api/api/dashboard/watchlist/validate?symbol={symbol}
 ```
 
-Validate a stock symbol format.
+#### Get Top Opportunities
 
 ```
-GET /api/api/dashboard/opportunities?user_id={user_id}&limit=10
+GET /api/api/dashboard/opportunities?user_id={user_id}&limit={limit}
 ```
 
-Get top ranked trading opportunities.
+#### Get Opportunity Detail
+
+```
+GET /api/api/dashboard/opportunities/{signal_id}?user_id={user_id}
+```
+
+#### Get Open Trades
+
+```
+GET /api/api/dashboard/trades/open?user_id={user_id}
+```
+
+#### Get Open Trades with Current Marks
+
+```
+GET /api/api/dashboard/trades/open-marked?user_id={user_id}
+```
+
+Returns open trades with computed current option prices and paper P&L.
+
+#### Get Recent News
+
+```
+GET /api/api/dashboard/news?user_id={user_id}&limit={limit}
+```
+
+#### Get Risk Settings
 
 ```
 GET /api/api/dashboard/risk-settings?user_id={user_id}
 ```
 
-Get user's risk settings and available risk levels.
+**Response:**
+```json
+{
+  "user_id": 1,
+  "risk_level": "medium",
+  "current_risk_level": "medium",
+  "paper_trading_enabled": true,
+  "live_trading_enabled": false,
+  "live_trading_approved": false,
+  "initial_portfolio_value": 100000.0,
+  "risk_profiles": {
+    "low": {...},
+    "medium": {...},
+    "high": {...}
+  }
+}
+```
+
+#### Update Risk Settings
 
 ```
 POST /api/api/dashboard/risk-settings/update?user_id={user_id}&risk_level={risk_level}&confirmed={confirmed}
 ```
 
-Update user's risk level.
+**Parameters:**
+- `user_id` (required): User ID
+- `risk_level` (required): "low", "medium", or "high"
+- `confirmed` (optional): Boolean, required for high risk level
+
+#### Get Kill Switch Status
+
+```
+GET /api/api/dashboard/kill-switch?user_id={user_id}
+```
+
+#### Activate Kill Switch
+
+```
+POST /api/api/dashboard/kill-switch/activate?user_id={user_id}&reason={reason}&close_positions={close_positions}
+```
+
+#### Deactivate Kill Switch
+
+```
+POST /api/api/dashboard/kill-switch/deactivate?user_id={user_id}
+```
 
 ## Configuration
 
-The application supports three environments: `dev`, `test`, and `prod`. Configuration is managed via environment variables (see `.env.example`).
+The application is configured via environment variables. See `.env.example` for all available options:
 
-### Environment Variables
+### Required Configuration
 
-- `ENVIRONMENT`: Application environment (dev/test/prod, default: dev)
-- `DEBUG`: Enable debug mode (default: True in dev)
 - `DATABASE_URL`: PostgreSQL connection string
 - `REDIS_URL`: Redis connection string
-- `SECRET_KEY`: Secret key for session management
-- `ALLOWED_HOSTS`: Comma-separated list of allowed hosts
-- `LOG_LEVEL`: Logging level (INFO/DEBUG/WARNING/ERROR, default: INFO)
-- `API_BASE_URL`: Base URL for API (default: http://localhost:8000/api)
-- `DASHBOARD_PREFIX`: Dashboard route prefix (default: /api/dashboard)
-- `DEMO_USER_ID`: Demo user ID for local development (default: 1)
-- `DATA_PROVIDER`: Data provider to use (yfinance/alpha_vantage/polygon/finnhub)
 - `ALPHAVANTAGE_API_KEY`: Alpha Vantage API key
 - `POLYGON_API_KEY`: Polygon API key
 - `NEWS_API_KEY`: News API key
 - `FINNHUB_API_KEY`: Finnhub API key
 
-See `.env.example` for all available configuration options.
+### Optional Configuration
 
-## Error Handling
-
-The application includes comprehensive error handling:
-
-- **Validation Errors** (400): Invalid request data
-- **Unauthorized** (401): Missing or invalid authentication
-- **Forbidden** (403): Insufficient permissions
-- **Not Found** (404): Resource not found
-- **Internal Server Error** (500): Unexpected server errors
-
-All errors return a consistent JSON response:
-```json
-{
-  "error": "ERROR_CODE",
-  "message": "Human-readable error message",
-  "status_code": 400
-}
-```
-
-## MVP User Flow
-
-The MVP defines a complete user journey from authentication through paper trade execution and position tracking. This flow ensures every screen has a defined purpose and no real-money trading occurs.
-
-### Flow Diagram
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│ SCREEN 1: LOGIN                                                 │
-│ Purpose: Authenticate user and establish session                │
-│ User Action: Enter credentials                                  │
-└────────────────────┬────────────────────────────────────────────┘
-                     │
-                     ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ SCREEN 2: DASHBOARD OVERVIEW                                    │
-│ Purpose: View portfolio, watchlist, opportunities, and trades   │
-│ User Action: Review dashboard; manage watchlist; view signals   │
-└────────────────────┬────────────────────────────────────────────┘
-                     │
-                     ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ SCREEN 3: RISK LEVEL SELECTION                                  │
-│ Purpose: User defines risk tolerance for scoring algorithm      │
-│ User Action: Select Low, Medium, or High risk profile           │
-└────────────────────┬────────────────────────────────────────────┘
-                     │
-                     ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ SCREEN 4: SIGNAL REVIEW & EXPLANATION                           │
-│ Purpose: User reviews top-ranked opportunity with full          │
-│          breakdown of score factors and estimated downside      │
-│ User Action: Review explanation; approve or reject trade        │
-└────────────────────┬────────────────────────────────────────────┘
-                     │
-                     ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ SCREEN 5: PAPER TRADE APPROVAL                                  │
-│ Purpose: Confirm paper trade execution (no real money)          │
-│ User Action: Approve paper trade entry                          │
-└────────────────────┬────────────────────────────────────────────┘
-                     │
-                     ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ SCREEN 6: POSITION TRACKING                                     │
-│ Purpose: Monitor open paper trade position in real-time         │
-│ User Action: View P&L, Greeks, and position details             │
-└────────────────────┬────────────────────────────────────────────┘
-                     │
-                     ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ SCREEN 7: TRADE HISTORY & ANALYSIS                              │
-│ Purpose: Review closed trades and backtest results              │
-│ User Action: Analyze performance; validate strategy             │
-└─────────────────────────────────────────────────────────────────┘
-```
+- `LOG_LEVEL`: Logging level (default: INFO)
+- `CELERY_BROKER_URL`: Celery broker URL (default: Redis)
+- `CELERY_RESULT_BACKEND`: Celery result backend (default: Redis)
+- `INITIAL_PORTFOLIO_VALUE`: Initial portfolio value for new users (default: 100000.0)
+- `DEFAULT_RISK_LEVEL`: Default risk level for new users (default: medium)
 
 ## Development Workflow
 
 ### Code Style
 
-The project uses:
-- **Black** for code formatting
-- **Flake8** for linting
-- **MyPy** for type checking
-
 ```bash
-# Format code
+# Format code with black
 black app/ services/ tests/
 
-# Lint code
+# Lint with flake8
 flake8 app/ services/ tests/
 
-# Type check
+# Type check with mypy
 mypy app/ services/
 ```
 
 ### Adding a New Strategy
 
-1. Create a new file in `app/strategies/` (e.g., `my_strategy.py`)
-2. Implement the `Strategy` base class
-3. Implement the `generate()` method
-4. Register the strategy in the strategy registry
-5. Add tests in `tests/test_strategies.py`
+1. Create a new file in `app/strategies/` (e.g., `iron_condor.py`)
+2. Implement the `Strategy` base class:
 
-Example:
 ```python
-from app.strategies.strategy import Strategy, StrategySignal, MarketData
+from app.strategies.strategy import Strategy, StrategySignal, MarketData, NewsContext
+from services import RiskLevel
+from services.options_service import OptionContract, ExitRule
+from typing import Optional, List
 
-class MyStrategy(Strategy):
+class IronCondorStrategy(Strategy):
     def __init__(self):
-        super().__init__(name="my_strategy")
+        super().__init__(name="iron_condor", enabled=True)
     
-    def generate(self, symbol, market_data, options_chain, news_context=None, risk_profile=None):
-        # Implement your strategy logic
-        # Return StrategySignal or None
+    def generate(
+        self,
+        symbol: str,
+        market_data: MarketData,
+        options_chain: List[OptionContract],
+        news_context: Optional[NewsContext] = None,
+        risk_profile: RiskLevel = RiskLevel.MEDIUM,
+    ) -> Optional[StrategySignal]:
+        # Implement strategy logic
+        # Return StrategySignal with score, expected_profit, max_loss, reason, exit_rules
         pass
 ```
 
+3. Register the strategy in `app/strategies/__init__.py`
+4. Add tests in `tests/test_strategies.py`
+5. Update risk guardrails in `app/risk/guardrails.py` if needed
+
 ### Adding a New Data Provider
 
-1. Create a new file in `app/data_sources/` (e.g., `my_provider.py`)
-2. Implement the `DataProvider` abstract base class
-3. Implement required methods: `get_price()`, `get_options_chain()`, `get_news()`
-4. Register in configuration
-5. Add tests in `tests/test_data_providers.py`
-
-## Backtesting
-
-The project includes a backtesting engine for strategy validation:
+1. Create a new file in `app/data_sources/` (e.g., `tradier_provider.py`)
+2. Implement the `DataProvider` interface:
 
 ```python
-from app.backtesting.covered_call_backtest import CoveredCallBacktester
-import pandas as pd
+from app.data_sources.data_provider import DataProvider
+from typing import Dict, List, Any, Optional
+from datetime import datetime
 
-# Load historical price data
-price_data = pd.read_csv('AAPL_daily.csv', index_col='date', parse_dates=True)
-
-# Run backtest
-backtester = CoveredCallBacktester()
-result = backtest.backtest('AAPL', price_data)
-
-print(result)
-# Output:
-# BacktestResult(covered_call on AAPL)
-#   Period: 2023-01-01 to 2024-01-01
-#   Initial: $100,000.00 -> Final: $112,345.67
-#   Return: 12.35% (annualized: 12.35%)
-#   Sharpe: 1.23 | Max DD: 8.45%
-#   Trades: 12 | Win Rate: 83.33%
+class TradierProvider(DataProvider):
+    def __init__(self, api_key: str):
+        self.api_key = api_key
+    
+    def get_quote(self, symbol: str) -> Dict[str, Any]:
+        # Implement quote fetching
+        pass
+    
+    def get_options_chain(self, symbol: str, expiration: Optional[str] = None) -> List[Dict[str, Any]]:
+        # Implement options chain fetching
+        pass
+    
+    def get_news(self, symbol: str, limit: int = 10) -> List[Dict[str, Any]]:
+        # Implement news fetching
+        pass
 ```
 
-See `app/backtesting/DECISION.md` for detailed information about the backtesting library choice and limitations.
+3. Add configuration in `app/core/config.py`
+4. Add tests in `tests/test_data_providers.py`
+
+### Running Backtests
+
+```python
+from app.backtesting.engine import BacktestEngine
+import pandas as pd
+
+# Create engine
+engine = BacktestEngine(initial_cash=100000.0)
+
+# Load price data
+price_data = pd.read_csv("price_data.csv", index_col="date", parse_dates=True)
+
+# Generate signals (1=buy, -1=sell, 0=hold)
+signals = pd.Series([0, 1, 0, 0, -1, 0], index=price_data.index)
+
+# Run backtest
+result = engine.backtest(
+    symbol="AAPL",
+    price_data=price_data,
+    signals=signals,
+    strategy_name="my_strategy"
+)
+
+print(result)
+print(f"Total Return: {result.total_return:.2f}%")
+print(f"Win Rate: {result.win_rate:.2%}")
+print(f"Sharpe Ratio: {result.sharpe_ratio:.2f}")
+```
 
 ## Contributing
 
@@ -551,12 +651,16 @@ Contributions are welcome! Please:
 
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Make your changes
-4. Add tests for new functionality
-5. Run tests and linting
-6. Commit your changes (`git commit -m 'Add amazing feature'`)
-7. Push to the branch (`git push origin feature/amazing-feature`)
-8. Open a Pull Request
+3. Commit your changes (`git commit -m 'Add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
+
+Please ensure:
+- All tests pass (`pytest`)
+- Code is formatted (`black`)
+- Code is linted (`flake8`)
+- Type hints are correct (`mypy`)
+- New features include tests
 
 ## License
 
@@ -564,4 +668,4 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ## Disclaimer
 
-**This application is for educational and research purposes only.** Options trading involves substantial risk of loss. Past performance does not guarantee future results. The application does not provide financial advice. Users are solely responsible for their trading decisions and must understand the risks involved. Always paper trade first and never risk more than you can afford to lose.
+This software is for educational and research purposes only. It is not financial advice. Options trading involves substantial risk of loss. Past performance does not guarantee future results. Always consult with a qualified financial advisor before making investment decisions.
