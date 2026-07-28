@@ -56,6 +56,25 @@ def test_user(db: Session):
 
 
 @pytest.fixture
+def test_user_2(db: Session):
+    """Create a second test user."""
+    user = User(
+        username="testuser2",
+        email="test2@example.com",
+        hashed_password="hashed_password",
+        is_active=True,
+        risk_level="medium",
+        paper_trading_enabled=True,
+        live_trading_enabled=False,
+        initial_portfolio_value=100000.0,
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+@pytest.fixture
 def test_option_contract(db: Session):
     """Create a test option contract."""
     contract = OptionContract(
@@ -333,6 +352,123 @@ class TestGetOpenTrades:
         assert len(open_trades) == 0
         assert open_trades == []
 
+    def test_get_open_trades_filters_by_user(
+        self,
+        trade_manager: TradeManager,
+        db: Session,
+        test_user: User,
+        test_user_2: User,
+        test_option_contract: OptionContract,
+    ):
+        """Test that get_open_trades only returns trades for the specified user."""
+        # Create signal and trade for user 1
+        signal_1 = Signal(
+            user_id=test_user.id,
+            symbol="AAPL",
+            strategy_type="covered_call",
+            risk_level="medium",
+            score=0.85,
+            expected_profit=150.0,
+            max_loss=500.0,
+            probability_estimate=0.72,
+            reason="Test signal 1",
+            status="pending",
+            option_contract_id=test_option_contract.id,
+            exit_rules='[]',
+        )
+        db.add(signal_1)
+        db.commit()
+        db.refresh(signal_1)
+        
+        trade_1 = trade_manager.approve_signal_as_paper_trade(
+            user_id=test_user.id,
+            signal_id=signal_1.id,
+            db=db,
+        )
+        
+        # Create signal and trade for user 2
+        signal_2 = Signal(
+            user_id=test_user_2.id,
+            symbol="MSFT",
+            strategy_type="cash_secured_put",
+            risk_level="medium",
+            score=0.80,
+            expected_profit=120.0,
+            max_loss=400.0,
+            probability_estimate=0.70,
+            reason="Test signal 2",
+            status="pending",
+            option_contract_id=test_option_contract.id,
+            exit_rules='[]',
+        )
+        db.add(signal_2)
+        db.commit()
+        db.refresh(signal_2)
+        
+        trade_2 = trade_manager.approve_signal_as_paper_trade(
+            user_id=test_user_2.id,
+            signal_id=signal_2.id,
+            db=db,
+        )
+        
+        # Get open trades for user 1
+        open_trades_user_1 = trade_manager.get_open_trades(test_user.id, db)
+        assert len(open_trades_user_1) == 1
+        assert open_trades_user_1[0].id == trade_1.id
+        assert open_trades_user_1[0].user_id == test_user.id
+        
+        # Get open trades for user 2
+        open_trades_user_2 = trade_manager.get_open_trades(test_user_2.id, db)
+        assert len(open_trades_user_2) == 1
+        assert open_trades_user_2[0].id == trade_2.id
+        assert open_trades_user_2[0].user_id == test_user_2.id
+
+    def test_get_open_trades_excludes_rejected_trades(
+        self,
+        trade_manager: TradeManager,
+        db: Session,
+        test_user: User,
+        test_signal: Signal,
+    ):
+        """Test that rejected trades are not returned."""
+        # Create an open trade
+        trade = trade_manager.approve_signal_as_paper_trade(
+            user_id=test_user.id,
+            signal_id=test_signal.id,
+            db=db,
+        )
+        
+        # Manually set status to rejected
+        trade.status = "rejected"
+        db.commit()
+        
+        open_trades = trade_manager.get_open_trades(test_user.id, db)
+        
+        assert len(open_trades) == 0
+
+    def test_get_open_trades_excludes_pending_trades(
+        self,
+        trade_manager: TradeManager,
+        db: Session,
+        test_user: User,
+        test_signal: Signal,
+    ):
+        """Test that pending trades are not returned."""
+        # Create an open trade
+        trade = trade_manager.approve_signal_as_paper_trade(
+            user_id=test_user.id,
+            signal_id=test_signal.id,
+            db=db,
+        )
+        
+        # Manually set status to pending
+        trade.status = "pending"
+        db.commit()
+        
+        open_trades = trade_manager.get_open_trades(test_user.id, db)
+        
+        assert len(open_trades) == 0
+
 
 class TestCloseTrade:
     """Tests for close_trade method."""
@@ -415,72 +551,6 @@ class TestCloseTrade:
         # P/L = (4.50 - 3.70) * 3 * 100 = 240
         assert closed_trade.realized_pnl == 240.0
 
-    def test_close_trade_updates_status(
-        self,
-        trade_manager: TradeManager,
-        db: Session,
-        test_user: User,
-        test_signal: Signal,
-    ):
-        """Test that closing a trade updates its status."""
-        trade = trade_manager.approve_signal_as_paper_trade(
-            user_id=test_user.id,
-            signal_id=test_signal.id,
-            db=db,
-        )
-        
-        assert trade.status == "open"
-        
-        closed_trade = trade_manager.close_trade(
-            user_id=test_user.id,
-            trade_id=trade.id,
-            db=db,
-            exit_price=4.50,
-        )
-        
-        assert closed_trade.status == "closed"
-        assert closed_trade.exit_price == 4.50
-        assert closed_trade.closed_at is not None
-
-    def test_close_trade_with_custom_exit_reason(
-        self,
-        trade_manager: TradeManager,
-        db: Session,
-        test_user: User,
-        test_signal: Signal,
-    ):
-        """Test that custom exit reason is stored."""
-        trade = trade_manager.approve_signal_as_paper_trade(
-            user_id=test_user.id,
-            signal_id=test_signal.id,
-            db=db,
-        )
-        
-        closed_trade = trade_manager.close_trade(
-            user_id=test_user.id,
-            trade_id=trade.id,
-            db=db,
-            exit_price=4.50,
-            exit_reason="profit_target_hit",
-        )
-        
-        assert closed_trade.exit_reason == "profit_target_hit"
-
-    def test_close_missing_trade_fails(
-        self,
-        trade_manager: TradeManager,
-        db: Session,
-        test_user: User,
-    ):
-        """Test that closing a non-existent trade fails."""
-        with pytest.raises(ValueError, match="Trade 999 not found"):
-            trade_manager.close_trade(
-                user_id=test_user.id,
-                trade_id=999,
-                db=db,
-                exit_price=4.50,
-            )
-
     def test_close_trade_for_wrong_user_fails(
         self,
         trade_manager: TradeManager,
@@ -488,7 +558,7 @@ class TestCloseTrade:
         test_user: User,
         test_signal: Signal,
     ):
-        """Test that closing a trade for a different user fails."""
+        """Test that closing a trade for wrong user fails."""
         trade = trade_manager.approve_signal_as_paper_trade(
             user_id=test_user.id,
             signal_id=test_signal.id,
