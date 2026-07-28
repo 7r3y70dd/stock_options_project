@@ -40,9 +40,9 @@ def test_user(db_session: Session) -> User:
 
 
 @pytest.fixture
-def trade_manager(db_session: Session) -> TradeManager:
+def trade_manager() -> TradeManager:
     """Create a TradeManager instance."""
-    return TradeManager(db_session)
+    return TradeManager()
 
 
 def test_covered_call_option_profitable_stock_losing(db_session: Session, test_user: User, trade_manager: TradeManager):
@@ -82,7 +82,7 @@ def test_covered_call_option_profitable_stock_losing(db_session: Session, test_u
     db_session.refresh(trade)
     
     # Calculate P/L
-    trade_manager.update_trade_pnl(trade)
+    trade_manager.update_trade_pnl(trade, db_session)
     db_session.refresh(trade)
     
     # Verify stock P/L
@@ -104,7 +104,7 @@ def test_covered_call_option_profitable_stock_losing(db_session: Session, test_u
     assert abs(trade.unrealized_pnl - (-55.0)) < 0.01, f"Total P/L should be -$55, got {trade.unrealized_pnl}"
     
     # Get detailed metrics
-    details = trade_manager.get_trade_details(trade)
+    details = trade_manager.get_trade_details(trade, db_session)
     
     # Verify premium captured %
     premium_captured_pct = details.get('premium_captured_pct', 0.0)
@@ -150,7 +150,7 @@ def test_covered_call_both_profitable(db_session: Session, test_user: User, trad
     db_session.refresh(trade)
     
     # Calculate P/L
-    trade_manager.update_trade_pnl(trade)
+    trade_manager.update_trade_pnl(trade, db_session)
     db_session.refresh(trade)
     
     # Verify stock P/L
@@ -202,7 +202,7 @@ def test_covered_call_maximum_profit(db_session: Session, test_user: User, trade
     db_session.refresh(trade)
     
     # Get trade details
-    details = trade_manager.get_trade_details(trade)
+    details = trade_manager.get_trade_details(trade, db_session)
     
     # Verify maximum profit
     max_profit = details.get('max_profit', 0.0)
@@ -244,7 +244,7 @@ def test_covered_call_break_even(db_session: Session, test_user: User, trade_man
     db_session.refresh(trade)
     
     # Get trade details
-    details = trade_manager.get_trade_details(trade)
+    details = trade_manager.get_trade_details(trade, db_session)
     
     # Verify break-even
     break_even = details.get('break_even', 0.0)
@@ -283,11 +283,11 @@ def test_covered_call_premium_captured_vs_total_return(db_session: Session, test
     db_session.refresh(trade)
     
     # Calculate P/L
-    trade_manager.update_trade_pnl(trade)
+    trade_manager.update_trade_pnl(trade, db_session)
     db_session.refresh(trade)
     
     # Get detailed metrics
-    details = trade_manager.get_trade_details(trade)
+    details = trade_manager.get_trade_details(trade, db_session)
     
     premium_captured_pct = details.get('premium_captured_pct', 0.0)
     total_return_pct = details.get('total_return_pct', 0.0)
@@ -348,13 +348,13 @@ def test_portfolio_no_double_counting(db_session: Session, test_user: User, trad
     db_session.commit()
     
     # Calculate P/L for both trades
-    trade_manager.update_trade_pnl(trade1)
-    trade_manager.update_trade_pnl(trade2)
+    trade_manager.update_trade_pnl(trade1, db_session)
+    trade_manager.update_trade_pnl(trade2, db_session)
     db_session.refresh(trade1)
     db_session.refresh(trade2)
     
     # Get portfolio summary
-    summary = trade_manager.get_portfolio_summary(test_user.id)
+    summary = trade_manager.get_portfolio_summary(test_user.id, db_session)
     
     # Verify separate tracking
     total_option_pnl = summary.get('option_pnl', 0.0)
