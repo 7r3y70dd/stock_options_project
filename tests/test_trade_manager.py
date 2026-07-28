@@ -52,11 +52,11 @@ def test_option_contract(db_session: Session) -> OptionContract:
 
 @pytest.fixture
 def test_signal(db_session: Session, test_user: User, test_option_contract: OptionContract) -> Signal:
-    """Create a test signal."""
+    """Create a test signal with covered_call strategy (allowed for medium risk)."""
     signal = Signal(
         user_id=test_user.id,
         symbol="AAPL",
-        strategy_type="long_call",
+        strategy_type="covered_call",
         risk_level="medium",
         score=85.0,
         expected_profit=500.0,
@@ -362,11 +362,11 @@ def test_csv_export_filters_by_user(
         db_session.add_all([user1, user2])
         db_session.commit()
         
-        # Create signals for both users
+        # Create signals for both users with allowed strategies
         signal1 = Signal(
             user_id=user1.id,
             symbol="AAPL",
-            strategy_type="long_call",
+            strategy_type="covered_call",
             risk_level="medium",
             score=85.0,
             expected_profit=500.0,
@@ -380,7 +380,7 @@ def test_csv_export_filters_by_user(
         signal2 = Signal(
             user_id=user2.id,
             symbol="MSFT",
-            strategy_type="long_put",
+            strategy_type="cash_secured_put",
             risk_level="medium",
             score=80.0,
             expected_profit=400.0,
@@ -438,11 +438,11 @@ def test_csv_export_status_filter_open(
     app.dependency_overrides[get_db] = override_get_db
     
     try:
-        # Create two signals
+        # Create two signals with allowed strategies
         signal1 = Signal(
             user_id=test_user.id,
             symbol="AAPL",
-            strategy_type="long_call",
+            strategy_type="covered_call",
             risk_level="medium",
             score=85.0,
             expected_profit=500.0,
@@ -456,7 +456,7 @@ def test_csv_export_status_filter_open(
         signal2 = Signal(
             user_id=test_user.id,
             symbol="MSFT",
-            strategy_type="long_put",
+            strategy_type="cash_secured_put",
             risk_level="medium",
             score=80.0,
             expected_profit=400.0,
@@ -524,11 +524,11 @@ def test_csv_export_status_filter_closed(
     app.dependency_overrides[get_db] = override_get_db
     
     try:
-        # Create two signals
+        # Create two signals with allowed strategies
         signal1 = Signal(
             user_id=test_user.id,
             symbol="AAPL",
-            strategy_type="long_call",
+            strategy_type="covered_call",
             risk_level="medium",
             score=85.0,
             expected_profit=500.0,
@@ -542,7 +542,7 @@ def test_csv_export_status_filter_closed(
         signal2 = Signal(
             user_id=test_user.id,
             symbol="MSFT",
-            strategy_type="long_put",
+            strategy_type="cash_secured_put",
             risk_level="medium",
             score=80.0,
             expected_profit=400.0,
@@ -639,11 +639,11 @@ def test_csv_export_special_characters(
     app.dependency_overrides[get_db] = override_get_db
     
     try:
-        # Create signal with special characters in reason
+        # Create signal with special characters in reason and allowed strategy
         signal = Signal(
             user_id=test_user.id,
             symbol="AAPL",
-            strategy_type="long_call",
+            strategy_type="covered_call",
             risk_level="medium",
             score=85.0,
             expected_profit=500.0,
