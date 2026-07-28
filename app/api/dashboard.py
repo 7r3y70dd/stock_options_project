@@ -1,14 +1,18 @@
 """Dashboard API endpoints."""
 
+import csv
+import io
 import logging
-from typing import Optional
+from typing import Optional, List
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.frontend.dashboard import Dashboard, DashboardData, SignalDetail
 from app.trading.trade_manager import TradeManager
+from app.models.database import Trade, OptionContract
 
 logger = logging.getLogger(__name__)
 
@@ -330,7 +334,7 @@ async def get_top_opportunities(
         dashboard: Dashboard service
         
     Returns:
-        List of top opportunities
+        Top opportunities with scores and details
     """
     try:
         opportunities = dashboard.get_top_opportunities(user_id, db, limit)
@@ -358,31 +362,76 @@ async def get_top_opportunities(
         raise HTTPException(status_code=500, detail="Failed to retrieve opportunities")
 
 
-@router.post("/trades/paper/approve", response_model=dict)
-async def approve_signal_as_paper_trade(
+@router.get("/opportunities/{signal_id}", response_model=dict)
+async def get_opportunity_detail(
+    signal_id: int,
     user_id: int = Query(..., description="User ID"),
-    signal_id: int = Query(..., description="Signal ID to approve"),
+    db: Session = Depends(get_db),
+    dashboard: Dashboard = Depends(get_dashboard),
+) -> dict:
+    """Get detailed information for a specific opportunity.
+    
+    Args:
+        signal_id: Signal ID
+        user_id: User ID
+        db: Database session
+        dashboard: Dashboard service
+        
+    Returns:
+        Detailed opportunity information
+        
+    Raises:
+        HTTPException: If signal not found or access denied
+    """
+    try:
+        detail = dashboard.get_opportunity_detail(signal_id, user_id, db)
+        if not detail:
+            raise HTTPException(status_code=404, detail="Opportunity not found")
+        
+        return {
+            "signal_id": detail.signal_id,
+            "symbol": detail.symbol,
+            "strategy_type": detail.strategy_type,
+            "score": detail.score,
+            "expected_profit": detail.expected_profit,
+            "max_loss": detail.max_loss,
+            "probability_estimate": detail.probability_estimate,
+            "reason": detail.reason,
+            "status": detail.status,
+            "created_at": detail.created_at.isoformat(),
+            "breakdown": detail.breakdown,
+            "exit_rules": detail.exit_rules,
+            "event_risks": detail.event_risks,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting opportunity detail for signal {signal_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to retrieve opportunity detail")
+
+
+@router.post("/signals/{signal_id}/paper-trade", response_model=dict)
+async def approve_signal_as_paper_trade(
+    signal_id: int,
+    user_id: int = Query(..., description="User ID"),
     quantity: int = Query(1, description="Number of contracts"),
     db: Session = Depends(get_db),
     trade_manager: TradeManager = Depends(get_trade_manager),
 ) -> dict:
-    """Approve a pending signal as a paper trade.
-    
-    Converts a pending signal into an open paper trade with entry price
-    calculated from the option contract mid-price.
+    """Approve a signal as a paper trade.
     
     Args:
-        user_id: User ID
         signal_id: Signal ID to approve
-        quantity: Number of contracts (default 1)
+        user_id: User ID
+        quantity: Number of contracts
         db: Database session
-        trade_manager: TradeManager service
+        trade_manager: Trade manager service
         
     Returns:
-        Success response with created trade details
+        Created trade information
         
     Raises:
-        HTTPException: If validation fails or error occurs
+        HTTPException: If signal not found, validation fails, or error occurs
     """
     try:
         trade = trade_manager.approve_signal_as_paper_trade(
@@ -392,103 +441,21 @@ async def approve_signal_as_paper_trade(
             quantity=quantity,
         )
         
-        # Get symbol from option contract
-        symbol = trade.option_contract.symbol if trade.option_contract else "UNKNOWN"
-        
         return {
             "status": "success",
             "message": "Signal approved as paper trade",
-            "trade": {
-                "trade_id": trade.id,
-                "signal_id": trade.signal_id,
-                "symbol": symbol,
-                "strategy_type": trade.signal.strategy_type if trade.signal else "unknown",
-                "entry_price": trade.entry_price,
-                "quantity": trade.quantity,
-                "status": trade.status,
-                "is_paper_trading": trade.is_paper_trading,
-                "opened_at": trade.opened_at.isoformat(),
-            },
+            "trade_id": trade.id,
+            "signal_id": signal_id,
+            "entry_price": float(trade.entry_price),
+            "quantity": trade.quantity,
+            "opened_at": trade.opened_at.isoformat(),
         }
     except ValueError as e:
         logger.warning(f"Validation error approving signal {signal_id}: {e}")
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.error(
-            f"Error approving signal {signal_id} as paper trade: {e}",
-            exc_info=True,
-        )
+        logger.error(f"Error approving signal {signal_id} as paper trade: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to approve signal as paper trade")
-
-
-@router.post("/signals/{signal_id}/paper-trade", response_model=dict)
-async def approve_signal_as_paper_trade(
-    signal_id: int,
-    user_id: int,
-    quantity: int = 1,
-    db: Session = Depends(get_db),
-):
-    """Approve a pending signal as a paper trade."""
-    try:
-        from app.trading.trade_manager import TradeManager
-        from app.models.database import Signal, OptionContract
-
-        trade = TradeManager().approve_signal_as_paper_trade(
-            user_id=user_id,
-            signal_id=signal_id,
-            db=db,
-            quantity=quantity,
-        )
-
-        signal = db.query(Signal).filter(Signal.id == trade.signal_id).first()
-        contract = None
-        if getattr(trade, "option_contract_id", None):
-            contract = (
-                db.query(OptionContract)
-                .filter(OptionContract.id == trade.option_contract_id)
-                .first()
-            )
-
-        symbol = None
-        strategy_type = None
-
-        if signal:
-            symbol = signal.symbol
-            strategy_type = signal.strategy_type
-
-        if not symbol and contract:
-            symbol = contract.symbol
-
-        return {
-            "status": "success",
-            "message": "Signal approved as paper trade",
-            "trade": {
-                "trade_id": trade.id,
-                "signal_id": trade.signal_id,
-                "option_contract_id": getattr(trade, "option_contract_id", None),
-                "symbol": symbol,
-                "strategy_type": strategy_type,
-                "entry_price": trade.entry_price,
-                "quantity": trade.quantity,
-                "status": trade.status,
-                "order_status": getattr(trade, "order_status", None),
-                "is_paper_trading": getattr(trade, "is_paper_trading", True),
-                "opened_at": (
-                    trade.opened_at.isoformat()
-                    if getattr(trade, "opened_at", None)
-                    else None
-                ),
-            },
-        }
-
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to approve signal as paper trade: {e}",
-        )
 
 
 @router.get("/trades/open", response_model=dict)
@@ -497,12 +464,12 @@ async def get_open_trades(
     db: Session = Depends(get_db),
     trade_manager: TradeManager = Depends(get_trade_manager),
 ) -> dict:
-    """Get all open trades for a user.
+    """Get all open trades for user.
     
     Args:
         user_id: User ID
         db: Database session
-        trade_manager: TradeManager service
+        trade_manager: Trade manager service
         
     Returns:
         List of open trades
@@ -513,14 +480,12 @@ async def get_open_trades(
             "trades": [
                 {
                     "trade_id": trade.id,
-                    "signal_id": trade.signal_id,
-                    "symbol": trade.option_contract.symbol if trade.option_contract else "UNKNOWN",
-                    "strategy_type": trade.signal.strategy_type if trade.signal else "unknown",
-                    "entry_price": trade.entry_price,
+                    "symbol": trade.option_contract.symbol if trade.option_contract else "N/A",
+                    "strategy_type": trade.signal.strategy_type if trade.signal else "N/A",
+                    "entry_price": float(trade.entry_price),
                     "quantity": trade.quantity,
-                    "status": trade.status,
-                    "is_paper_trading": trade.is_paper_trading,
                     "opened_at": trade.opened_at.isoformat(),
+                    "status": trade.status,
                 }
                 for trade in trades
             ],
@@ -529,6 +494,33 @@ async def get_open_trades(
     except Exception as e:
         logger.error(f"Error getting open trades for user {user_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to retrieve open trades")
+
+
+@router.get("/trades/open/count", response_model=dict)
+async def get_open_trade_count(
+    user_id: int = Query(..., description="User ID"),
+    db: Session = Depends(get_db),
+    trade_manager: TradeManager = Depends(get_trade_manager),
+) -> dict:
+    """Get count of open trades for user.
+    
+    Args:
+        user_id: User ID
+        db: Database session
+        trade_manager: Trade manager service
+        
+    Returns:
+        User ID and open trade count
+    """
+    try:
+        trades = trade_manager.get_open_trades(user_id, db)
+        return {
+            "user_id": user_id,
+            "open_trade_count": len(trades),
+        }
+    except Exception as e:
+        logger.error(f"Error getting open trade count for user {user_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to retrieve open trade count")
 
 
 @router.post("/trades/{trade_id}/close", response_model=dict)
@@ -548,13 +540,13 @@ async def close_trade(
         exit_price: Price at which to exit
         exit_reason: Reason for closing
         db: Database session
-        trade_manager: TradeManager service
+        trade_manager: Trade manager service
         
     Returns:
-        Closed trade details with realized P/L
+        Closed trade information with realized P/L
         
     Raises:
-        HTTPException: If validation fails or error occurs
+        HTTPException: If trade not found, validation fails, or error occurs
     """
     try:
         trade = trade_manager.close_trade(
@@ -568,17 +560,10 @@ async def close_trade(
         return {
             "status": "success",
             "message": "Trade closed successfully",
-            "trade": {
-                "trade_id": trade.id,
-                "signal_id": trade.signal_id,
-                "symbol": trade.option_contract.symbol if trade.option_contract else "UNKNOWN",
-                "entry_price": trade.entry_price,
-                "exit_price": trade.exit_price,
-                "quantity": trade.quantity,
-                "realized_pnl": trade.realized_pnl,
-                "status": trade.status,
-                "closed_at": trade.closed_at.isoformat() if trade.closed_at else None,
-            },
+            "trade_id": trade.id,
+            "exit_price": float(trade.exit_price),
+            "realized_pnl": float(trade.realized_pnl) if trade.realized_pnl else 0.0,
+            "closed_at": trade.closed_at.isoformat(),
         }
     except ValueError as e:
         logger.warning(f"Validation error closing trade {trade_id}: {e}")
@@ -586,3 +571,131 @@ async def close_trade(
     except Exception as e:
         logger.error(f"Error closing trade {trade_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to close trade")
+
+
+@router.get("/trades/export")
+async def export_trades_csv(
+    user_id: int = Query(..., description="User ID"),
+    status: Optional[str] = Query(None, description="Filter by status: open or closed"),
+    db: Session = Depends(get_db),
+) -> StreamingResponse:
+    """Export user's trade history as CSV.
+    
+    Args:
+        user_id: User ID
+        status: Optional status filter ("open" or "closed")
+        db: Database session
+        
+    Returns:
+        CSV file with trade history
+        
+    Raises:
+        HTTPException: If error occurs
+    """
+    try:
+        # Build query for user's trades
+        query = db.query(Trade).filter(Trade.user_id == user_id)
+        
+        # Apply status filter if provided
+        if status:
+            status_lower = status.lower()
+            if status_lower not in ("open", "closed"):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invalid status filter. Must be 'open' or 'closed'."
+                )
+            query = query.filter(Trade.status == status_lower)
+        
+        # Order by opened_at descending
+        trades = query.order_by(Trade.opened_at.desc()).all()
+        
+        # Create CSV in memory
+        output = io.StringIO()
+        writer = csv.writer(output, quoting=csv.QUOTE_MINIMAL)
+        
+        # Write header row
+        writer.writerow([
+            "Trade ID",
+            "Symbol",
+            "Strategy",
+            "Status",
+            "Option Type",
+            "Strike",
+            "Expiration",
+            "Quantity",
+            "Entry Price",
+            "Exit Price",
+            "Realized P/L",
+            "Opened At",
+            "Closed At",
+            "Paper Trade",
+        ])
+        
+        # Write trade rows
+        for trade in trades:
+            # Get option contract details if available
+            option_type = ""
+            strike = ""
+            expiration = ""
+            symbol = ""
+            
+            if trade.option_contract:
+                contract = trade.option_contract
+                symbol = contract.symbol or ""
+                option_type = contract.contract_type or ""
+                strike = str(contract.strike) if contract.strike is not None else ""
+                expiration = contract.expiration or ""
+            
+            # Get strategy from signal if available
+            strategy = ""
+            if trade.signal:
+                strategy = trade.signal.strategy_type or ""
+            
+            # Format dates
+            opened_at = trade.opened_at.isoformat() if trade.opened_at else ""
+            closed_at = trade.closed_at.isoformat() if trade.closed_at else ""
+            
+            # Format prices and P/L
+            entry_price = f"{float(trade.entry_price):.2f}" if trade.entry_price is not None else ""
+            exit_price = f"{float(trade.exit_price):.2f}" if trade.exit_price is not None else ""
+            realized_pnl = f"{float(trade.realized_pnl):.2f}" if trade.realized_pnl is not None else ""
+            
+            # Paper trade flag
+            paper_trade = "Yes" if trade.is_paper_trading else "No"
+            
+            writer.writerow([
+                trade.id,
+                symbol,
+                strategy,
+                trade.status or "",
+                option_type,
+                strike,
+                expiration,
+                trade.quantity or "",
+                entry_price,
+                exit_price,
+                realized_pnl,
+                opened_at,
+                closed_at,
+                paper_trade,
+            ])
+        
+        # Prepare response
+        output.seek(0)
+        
+        # Generate filename
+        filename = f"trades-user-{user_id}.csv"
+        
+        return StreamingResponse(
+            iter([output.getvalue()]),
+            media_type="text/csv; charset=utf-8",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"'
+            }
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error exporting trades CSV for user {user_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to export trades")
