@@ -1,895 +1,282 @@
-"""Dashboard service for aggregating user portfolio and trading data.
+"""Dashboard page for Streamlit frontend.
 
-Provides a unified interface for fetching dashboard data including:
-- Portfolio summary (total value, cash, positions, P/L)
-- Watchlist symbols with current prices
-- Top opportunities (ranked signals)
-- Open trades with current P/L
-- Recent news articles
-- User risk settings
-- Signal detail pages with full explanation
+Displays portfolio summary, recent signals, and market overview.
+For covered calls, shows portfolio-level P/L with clear separation between
+options P/L and underlying stock P/L to prevent misleading displays.
 """
 
-import logging
-import json
-from typing import Optional, List, Dict, Any
-from dataclasses import dataclass, asdict
-from datetime import datetime, timedelta
+import streamlit as st
+import pandas as pd
+from datetime import datetime
+from typing import Dict, List, Optional
 
-from sqlalchemy.orm import Session
-
-from app.models.database import (
-    User,
-    Watchlist,
-    WatchlistSymbol,
-    Signal,
-    Trade,
-    OptionContract,
-    NewsArticle,
-)
-from app.core.scoring import SignalScorer
-from app.core.paper_broker_provider import PaperBrokerProvider
-
-logger = logging.getLogger(__name__)
+from app.frontend.api_client import APIClient
 
 
-@dataclass
-class PortfolioSummary:
-    """Portfolio summary data."""
-    total_value: float  # Total portfolio value
-    cash: float  # Available cash
-    positions_value: float  # Value of open positions
-    open_pl: float  # Open profit/loss
-    open_pl_pct: float  # Open P/L as percentage
-    num_open_trades: int  # Number of open trades
-    num_open_signals: int  # Number of pending signals
+def format_currency(value: Optional[float]) -> str:
+    """Format a value as currency."""
+    if value is None:
+        return "N/A"
+    return f"${value:,.2f}"
 
 
-@dataclass
-class WatchlistItem:
-    """Watchlist item with current price and data freshness."""
-    symbol: str
-    current_price: Optional[float]
-    added_at: datetime
-    last_updated: Optional[datetime] = None  # When price was last fetched
-    data_freshness_seconds: Optional[int] = None  # How old the price data is
+def format_percentage(value: Optional[float]) -> str:
+    """Format a value as percentage."""
+    if value is None:
+        return "N/A"
+    return f"{value:.2f}%"
 
 
-@dataclass
-class OpportunityItem:
-    """Top opportunity (ranked signal)."""
-    signal_id: int
-    symbol: str
-    strategy_type: str
-    score: float  # 0-100
-    expected_profit: float
-    max_loss: float
-    probability_estimate: float
-    reason: str
-    status: str
-    created_at: datetime
-    breakdown: Optional[Dict[str, float]]
+def get_pnl_color(value: Optional[float]) -> str:
+    """Get color for P/L display (green for positive, red for negative)."""
+    if value is None:
+        return "gray"
+    return "green" if value >= 0 else "red"
 
 
-@dataclass
-class TradeItem:
-    """Open trade with current P/L."""
-    trade_id: int
-    symbol: str
-    strategy_type: str
-    entry_price: float
-    current_price: Optional[float]
-    quantity: int
-    entry_date: datetime
-    current_pl: Optional[float]  # Current profit/loss
-    current_pl_pct: Optional[float]  # Current P/L as percentage
-    status: str
-
-
-@dataclass
-class NewsItem:
-    """Recent news article."""
-    article_id: int
-    symbol: str
-    title: str
-    description: Optional[str]
-    url: Optional[str]
-    source: Optional[str]
-    published_at: Optional[datetime]
-    sentiment: Optional[str]  # "positive", "negative", "neutral"
-    sentiment_score: Optional[float]  # -1.0 to 1.0
-    event_type: Optional[str]
-
-
-@dataclass
-class RiskLevelInfo:
-    """Information about a risk level."""
-    level: str  # "low", "medium", "high"
-    description: str
-    max_position_size_pct: float  # Max position size as % of portfolio
-    allowed_strategies: List[str]
-    max_loss_per_trade_pct: float  # Max loss per trade as % of portfolio
-    requires_confirmation: bool  # Whether this level requires explicit confirmation
-
-
-@dataclass
-class RiskSettings:
-    """User risk settings."""
-    risk_level: str  # "low", "medium", "high"
-    paper_trading_enabled: bool
-    live_trading_enabled: bool
-    live_trading_approved: bool
-    risk_levels_info: List[RiskLevelInfo]  # Info about each risk level
-
-
-@dataclass
-class DashboardData:
-    """Complete dashboard data."""
-    portfolio_summary: PortfolioSummary
-    watchlist: List[WatchlistItem]
-    top_opportunities: List[OpportunityItem]
-    open_trades: List[TradeItem]
-    recent_news: List[NewsItem]
-    risk_settings: RiskSettings
-    timestamp: datetime
-
-
-@dataclass
-class ContractDetail:
-    """Option contract detail for signal."""
-    contract_id: int
-    symbol: str
-    expiration: str
-    strike: float
-    contract_type: str  # call or put
-    bid: float
-    ask: float
-    volume: int
-    open_interest: int
-    implied_volatility: float
-    delta: Optional[float]
-    gamma: Optional[float]
-    theta: Optional[float]
-    vega: Optional[float]
-    underlying_price: float
-    days_to_expiration: int
-    liquidity_score: Optional[float]
-
-
-@dataclass
-class SignalDetail:
-    """Complete signal detail page data."""
-    signal_id: int
-    symbol: str
-    strategy_type: str
-    risk_level: str
-    score: float  # 0-100
-    expected_profit: float
-    max_loss: float
-    probability_estimate: float
-    reason: str  # Strategy summary
-    status: str
-    created_at: datetime
-    updated_at: datetime
+def render_portfolio_summary(api_client: APIClient):
+    """Render portfolio summary with detailed P/L breakdown.
     
-    # Sections
-    breakdown: Optional[Dict[str, float]]  # Score breakdown
-    contracts: List[ContractDetail]  # Contracts involved
-    event_risks: Optional[Dict[str, Any]]  # Event risk details
-    exit_rules: List[Dict[str, Any]]  # Exit plan
-    related_news: List[NewsItem]  # News context
-    related_trades: List[TradeItem]  # Backtest/paper history
+    For covered calls, displays:
+    - Total Unrealized P/L (combined)
+    - Options P/L (separate)
+    - Underlying Stock P/L (separate)
     
-    # Greeks summary
-    greeks_summary: Optional[Dict[str, float]]  # Aggregate Greeks
-
-
-class Dashboard:
-    """Dashboard service for aggregating user portfolio and trading data."""
-
-    # Risk level configurations
-    RISK_LEVEL_CONFIGS = {
-        "low": RiskLevelInfo(
-            level="low",
-            description="Conservative: Favors high liquidity, defined risk, lower max loss",
-            max_position_size_pct=2.0,
-            allowed_strategies=["covered_call", "cash_secured_put"],
-            max_loss_per_trade_pct=1.0,
-            requires_confirmation=False,
-        ),
-        "medium": RiskLevelInfo(
-            level="medium",
-            description="Balanced: Allows wider reward/risk ratios with moderate risk",
-            max_position_size_pct=5.0,
-            allowed_strategies=["covered_call", "cash_secured_put", "debit_spread", "credit_spread"],
-            max_loss_per_trade_pct=2.0,
-            requires_confirmation=False,
-        ),
-        "high": RiskLevelInfo(
-            level="high",
-            description="Aggressive: Allows volatility and lower probability if payoff is larger",
-            max_position_size_pct=10.0,
-            allowed_strategies=["covered_call", "cash_secured_put", "debit_spread", "credit_spread", "long_call", "long_put"],
-            max_loss_per_trade_pct=5.0,
-            requires_confirmation=True,
-        ),
-    }
-
-    def __init__(
-        self,
-        broker_provider: Optional[PaperBrokerProvider] = None,
-    ):
-        """Initialize dashboard service.
-
-        Args:
-            broker_provider: Optional broker provider for P/L calculations
-        """
-        self.broker_provider = broker_provider or PaperBrokerProvider()
-
-    def get_portfolio_summary(
-        self,
-        user_id: int,
-        db: Session,
-    ) -> PortfolioSummary:
-        """Get portfolio summary for user.
-
-        Args:
-            user_id: User ID
-            db: Database session
-
-        Returns:
-            PortfolioSummary with portfolio metrics
-        """
-        try:
-            # Get user
-            user = db.query(User).filter(User.id == user_id).first()
-            if not user:
-                logger.warning(f"User {user_id} not found")
-                return PortfolioSummary(
-                    total_value=0.0,
-                    cash=0.0,
-                    positions_value=0.0,
-                    open_pl=0.0,
-                    open_pl_pct=0.0,
-                    num_open_trades=0,
-                    num_open_signals=0,
-                )
-
-            # Get portfolio from broker
-            portfolio = self.broker_provider.get_portfolio(user_id=user_id, db=db)
-
-            # Count open trades and signals
-            open_trades = db.query(Trade).filter(
-                Trade.user_id == user_id,
-                Trade.status == "open",
-            ).all()
-            num_open_trades = len(open_trades)
-
-            pending_signals = db.query(Signal).filter(
-                Signal.user_id == user_id,
-                Signal.status == "pending",
-            ).all()
-            num_open_signals = len(pending_signals)
-
-            # Calculate P/L
-            total_value = portfolio.get("total_value", user.initial_portfolio_value)
-            cash = portfolio.get("cash", user.initial_portfolio_value)
-            positions_value = total_value - cash
-            open_pl = total_value - user.initial_portfolio_value
-            open_pl_pct = (open_pl / user.initial_portfolio_value * 100) if user.initial_portfolio_value > 0 else 0.0
-
-            return PortfolioSummary(
-                total_value=total_value,
-                cash=cash,
-                positions_value=positions_value,
-                open_pl=open_pl,
-                open_pl_pct=open_pl_pct,
-                num_open_trades=num_open_trades,
-                num_open_signals=num_open_signals,
-            )
-        except Exception as e:
-            logger.error(f"Error getting portfolio summary for user {user_id}: {e}", exc_info=True)
-            return PortfolioSummary(
-                total_value=0.0,
-                cash=0.0,
-                positions_value=0.0,
-                open_pl=0.0,
-                open_pl_pct=0.0,
-                num_open_trades=0,
-                num_open_signals=0,
-            )
-
-    def get_watchlist(
-        self,
-        user_id: int,
-        db: Session,
-        watchlist_id: Optional[int] = None,
-    ) -> List[WatchlistItem]:
-        """Get watchlist items for user.
-
-        Args:
-            user_id: User ID
-            db: Database session
-            watchlist_id: Optional specific watchlist ID
-
-        Returns:
-            List of WatchlistItem objects
-        """
-        try:
-            # Get watchlist symbols
-            query = db.query(WatchlistSymbol).join(Watchlist).filter(
-                Watchlist.user_id == user_id,
-            )
-
-            if watchlist_id:
-                query = query.filter(Watchlist.id == watchlist_id)
-
-            symbols = query.all()
-
-            # Convert to WatchlistItem (price data would come from data provider)
-            items = [
-                WatchlistItem(
-                    symbol=symbol.symbol,
-                    current_price=None,  # Would be fetched from data provider
-                    added_at=symbol.added_at,
-                    last_updated=None,
-                    data_freshness_seconds=None,
-                )
-                for symbol in symbols
-            ]
-
-            return items
-        except Exception as e:
-            logger.error(f"Error getting watchlist for user {user_id}: {e}", exc_info=True)
-            return []
-
-    def validate_symbol(self, symbol: str) -> Dict[str, Any]:
-        """Validate a stock symbol format.
-
-        Args:
-            symbol: Stock symbol to validate
-
-        Returns:
-            Dictionary with valid, message, and symbol
-        """
-        try:
-            if not symbol or not isinstance(symbol, str):
-                return {
-                    "valid": False,
-                    "message": "Symbol must be a non-empty string",
-                    "symbol": symbol,
-                }
-            
-            symbol_upper = symbol.upper().strip()
-            
-            # Symbol should be 1-5 characters, alphanumeric
-            if not (1 <= len(symbol_upper) <= 5 and symbol_upper.isalpha()):
-                return {
-                    "valid": False,
-                    "message": f"Invalid symbol format. Must be 1-5 letters (got '{symbol_upper}')",
-                    "symbol": symbol_upper,
-                }
-            
-            return {
-                "valid": True,
-                "message": "Symbol is valid",
-                "symbol": symbol_upper,
-            }
-        except Exception as e:
-            logger.error(f"Error validating symbol {symbol}: {e}", exc_info=True)
-            return {
-                "valid": False,
-                "message": "Error validating symbol",
-                "symbol": symbol,
-            }
-
-    def add_symbol(
-        self,
-        user_id: int,
-        symbol: str,
-        db: Session,
-        watchlist_id: Optional[int] = None,
-    ) -> Dict[str, Any]:
-        """Add a symbol to user's watchlist.
-
-        Args:
-            user_id: User ID
-            symbol: Stock symbol to add
-            db: Database session
-            watchlist_id: Optional specific watchlist ID. If None, uses first watchlist.
-
-        Returns:
-            Dictionary with status and message
-        """
-        try:
-            # Validate symbol format
-            validation = self.validate_symbol(symbol)
-            if not validation["valid"]:
-                return {
-                    "status": "error",
-                    "message": validation["message"],
-                    "symbol": symbol,
-                }
-            
-            symbol = validation["symbol"]
-            
-            # Get user
-            user = db.query(User).filter(User.id == user_id).first()
-            if not user:
-                return {"status": "error", "message": "User not found", "symbol": symbol}
-            
-            # Get or create watchlist
-            if watchlist_id:
-                watchlist = db.query(Watchlist).filter(
-                    Watchlist.id == watchlist_id,
-                    Watchlist.user_id == user_id,
-                ).first()
-                if not watchlist:
-                    return {
-                        "status": "error",
-                        "message": "Watchlist not found",
-                        "symbol": symbol,
-                    }
+    This prevents profitable option premiums from hiding losses in underlying shares.
+    """
+    st.header("Portfolio Summary")
+    
+    try:
+        # Fetch portfolio summary
+        summary = api_client.get_portfolio_summary()
+        
+        # Fetch trades for detailed breakdown
+        trades_response = api_client.get_trades()
+        trades = trades_response.get('trades', [])
+        open_trades = [t for t in trades if t.get('status') == 'open']
+        
+        # Calculate total P/L
+        total_pnl = summary.get('total_pnl', 0.0)
+        
+        # Calculate separate option and stock P/L for covered calls
+        total_option_pnl = 0.0
+        total_stock_pnl = 0.0
+        other_pnl = 0.0
+        
+        for trade in open_trades:
+            strategy = trade.get('strategy_type', '')
+            if strategy == 'covered_call':
+                # For covered calls, separate option and stock P/L
+                option_pnl = trade.get('option_pnl', 0.0)
+                stock_pnl = trade.get('stock_pnl', 0.0)
+                if option_pnl is not None:
+                    total_option_pnl += option_pnl
+                if stock_pnl is not None:
+                    total_stock_pnl += stock_pnl
             else:
-                # Get first watchlist or create default
-                watchlist = db.query(Watchlist).filter(
-                    Watchlist.user_id == user_id,
-                ).first()
+                # For other strategies, add to other P/L
+                trade_pnl = trade.get('pnl', 0.0)
+                if trade_pnl is not None:
+                    other_pnl += trade_pnl
+        
+        # Display metrics
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            portfolio_value = summary.get('portfolio_value', 0.0)
+            st.metric("Portfolio Value", format_currency(portfolio_value))
+        
+        with col2:
+            cash_balance = summary.get('cash_balance', 0.0)
+            st.metric("Cash Balance", format_currency(cash_balance))
+        
+        with col3:
+            total_return_pct = summary.get('total_return_pct', 0.0)
+            st.metric("Total Return", format_percentage(total_return_pct))
+        
+        with col4:
+            open_positions = len(open_trades)
+            st.metric("Open Positions", f"{open_positions}")
+        
+        # Detailed P/L breakdown
+        st.subheader("Unrealized P/L Breakdown")
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            pnl_color = get_pnl_color(total_pnl)
+            st.markdown(f"### Total Unrealized P/L")
+            st.markdown(f"## :{pnl_color}[{format_currency(total_pnl)}]")
+        
+        # Show breakdown if there are covered calls
+        if total_option_pnl != 0 or total_stock_pnl != 0:
+            with col2:
+                opt_color = get_pnl_color(total_option_pnl)
+                st.markdown(f"### Options P/L")
+                st.markdown(f"## :{opt_color}[{format_currency(total_option_pnl)}]")
+                st.caption("From covered call premiums")
+            
+            with col3:
+                stock_color = get_pnl_color(total_stock_pnl)
+                st.markdown(f"### Underlying Stock P/L")
+                st.markdown(f"## :{stock_color}[{format_currency(total_stock_pnl)}]")
+                st.caption("From covered call stock holdings")
+            
+            # Show warning if option P/L is positive but total is negative
+            if total_option_pnl > 0 and total_pnl < 0:
+                st.warning(
+                    "⚠️ Note: While option premiums show a profit, the underlying stock losses "
+                    "result in an overall negative position. Consider your exit strategy."
+                )
+        
+        # Show other strategies P/L if present
+        if other_pnl != 0:
+            st.markdown(f"**Other Strategies P/L:** :{get_pnl_color(other_pnl)}[{format_currency(other_pnl)}]")
+        
+        # Risk metrics
+        st.subheader("Risk Metrics")
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            buying_power = summary.get('buying_power', 0.0)
+            st.metric("Buying Power", format_currency(buying_power))
+        
+        with col2:
+            margin_used = summary.get('margin_used', 0.0)
+            st.metric("Margin Used", format_currency(margin_used))
+        
+        with col3:
+            max_loss = summary.get('max_loss', 0.0)
+            st.metric("Max Loss (Open Positions)", format_currency(max_loss))
+        
+    except Exception as e:
+        st.error(f"Failed to fetch portfolio summary: {str(e)}")
+
+
+def render_recent_signals(api_client: APIClient):
+    """Render recent trading signals."""
+    st.header("Recent Signals")
+    
+    try:
+        signals_response = api_client.get_signals(limit=5)
+        signals = signals_response.get('signals', [])
+        
+        if not signals:
+            st.info("No recent signals. Generate new signals to see recommendations.")
+            return
+        
+        for signal in signals:
+            with st.expander(f"{signal.get('symbol', 'N/A')} - {signal.get('strategy_type', 'Unknown').replace('_', ' ').title()}"):
+                col1, col2, col3 = st.columns(3)
                 
-                if not watchlist:
-                    watchlist = Watchlist(
-                        user_id=user_id,
-                        name="Default Watchlist",
-                        description="Default watchlist",
+                with col1:
+                    score = signal.get('score', 0.0)
+                    st.metric("Score", f"{score:.2f}")
+                
+                with col2:
+                    expected_profit = signal.get('expected_profit', 0.0)
+                    st.metric("Expected Profit", format_currency(expected_profit))
+                
+                with col3:
+                    max_loss = signal.get('max_loss', 0.0)
+                    st.metric("Max Loss", format_currency(max_loss))
+                
+                reason = signal.get('reason', 'No reason provided')
+                st.write(f"**Reason:** {reason}")
+                
+                status = signal.get('status', 'pending')
+                st.write(f"**Status:** {status.title()}")
+                
+                # Action buttons
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.button("✅ Approve", key=f"approve_{signal.get('id')}"):
+                        try:
+                            api_client.update_signal_status(signal.get('id'), 'approved')
+                            st.success("Signal approved!")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Failed to approve signal: {str(e)}")
+                
+                with col2:
+                    if st.button("❌ Reject", key=f"reject_{signal.get('id')}"):
+                        try:
+                            api_client.update_signal_status(signal.get('id'), 'rejected')
+                            st.success("Signal rejected!")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Failed to reject signal: {str(e)}")
+    
+    except Exception as e:
+        st.error(f"Failed to fetch signals: {str(e)}")
+
+
+def render_market_overview(api_client: APIClient):
+    """Render market overview with key indices."""
+    st.header("Market Overview")
+    
+    try:
+        # Fetch market data for major indices
+        indices = ['SPY', 'QQQ', 'IWM']  # S&P 500, Nasdaq, Russell 2000
+        
+        cols = st.columns(len(indices))
+        
+        for idx, symbol in enumerate(indices):
+            with cols[idx]:
+                try:
+                    quote = api_client.get_quote(symbol)
+                    price = quote.get('price', 0.0)
+                    change = quote.get('change', 0.0)
+                    change_pct = quote.get('change_pct', 0.0)
+                    
+                    st.metric(
+                        symbol,
+                        format_currency(price),
+                        f"{change:+.2f} ({change_pct:+.2f}%)"
                     )
-                    db.add(watchlist)
-                    db.commit()
-            
-            # Check if symbol already exists
-            existing = db.query(WatchlistSymbol).filter(
-                WatchlistSymbol.watchlist_id == watchlist.id,
-                WatchlistSymbol.symbol == symbol,
-            ).first()
-            
-            if existing:
-                return {
-                    "status": "error",
-                    "message": f"Symbol {symbol} already in watchlist",
-                    "symbol": symbol,
-                }
-            
-            # Add symbol
-            ws = WatchlistSymbol(
-                watchlist_id=watchlist.id,
-                symbol=symbol,
-            )
-            db.add(ws)
-            db.commit()
-            
-            return {
-                "status": "success",
-                "message": f"Symbol {symbol} added to watchlist",
-                "symbol": symbol,
-            }
-        except Exception as e:
-            logger.error(f"Error adding symbol {symbol} for user {user_id}: {e}", exc_info=True)
-            db.rollback()
-            return {
-                "status": "error",
-                "message": "Failed to add symbol",
-                "symbol": symbol,
-            }
+                except:
+                    st.metric(symbol, "N/A")
+        
+    except Exception as e:
+        st.error(f"Failed to fetch market data: {str(e)}")
 
-    def remove_symbol(
-        self,
-        user_id: int,
-        symbol: str,
-        db: Session,
-        watchlist_id: Optional[int] = None,
-    ) -> Dict[str, Any]:
-        """Remove a symbol from user's watchlist.
 
-        Args:
-            user_id: User ID
-            symbol: Stock symbol to remove
-            db: Database session
-            watchlist_id: Optional specific watchlist ID
+def render_dashboard():
+    """Render the main dashboard page."""
+    st.title("📈 Options Trading Dashboard")
+    
+    # Initialize API client
+    api_client = APIClient()
+    
+    # Render sections
+    render_portfolio_summary(api_client)
+    st.markdown("---")
+    
+    render_recent_signals(api_client)
+    st.markdown("---")
+    
+    render_market_overview(api_client)
+    
+    # Quick actions
+    st.header("Quick Actions")
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        if st.button("🔍 Generate New Signals", use_container_width=True):
+            try:
+                api_client.generate_signals()
+                st.success("Signal generation started! Check back in a few moments.")
+            except Exception as e:
+                st.error(f"Failed to generate signals: {str(e)}")
+    
+    with col2:
+        if st.button("📊 View Portfolio", use_container_width=True):
+            st.switch_page("pages/portfolio.py")
+    
+    with col3:
+        if st.button("👁️ Manage Watchlist", use_container_width=True):
+            st.switch_page("pages/watchlist.py")
 
-        Returns:
-            Dictionary with status and message
-        """
-        try:
-            symbol = symbol.upper().strip()
-            
-            # Get user
-            user = db.query(User).filter(User.id == user_id).first()
-            if not user:
-                return {"status": "error", "message": "User not found", "symbol": symbol}
-            
-            # Find watchlist
-            query = db.query(Watchlist).filter(Watchlist.user_id == user_id)
-            if watchlist_id:
-                query = query.filter(Watchlist.id == watchlist_id)
-            
-            watchlist = query.first()
-            if not watchlist:
-                return {
-                    "status": "error",
-                    "message": "Watchlist not found",
-                    "symbol": symbol,
-                }
-            
-            # Find and remove symbol
-            ws = db.query(WatchlistSymbol).filter(
-                WatchlistSymbol.watchlist_id == watchlist.id,
-                WatchlistSymbol.symbol == symbol,
-            ).first()
-            
-            if not ws:
-                return {
-                    "status": "error",
-                    "message": f"Symbol {symbol} not in watchlist",
-                    "symbol": symbol,
-                }
-            
-            db.delete(ws)
-            db.commit()
-            
-            return {
-                "status": "success",
-                "message": f"Symbol {symbol} removed from watchlist",
-                "symbol": symbol,
-            }
-        except Exception as e:
-            logger.error(f"Error removing symbol {symbol} for user {user_id}: {e}", exc_info=True)
-            db.rollback()
-            return {
-                "status": "error",
-                "message": "Failed to remove symbol",
-                "symbol": symbol,
-            }
 
-    def get_top_opportunities(
-        self,
-        user_id: int,
-        db: Session,
-        limit: int = 10,
-    ) -> List[OpportunityItem]:
-        """Get top ranked opportunities for user."""
-        try:
-            # Accept both app-generated pending signals and dev-generated open signals.
-            signals = (
-                db.query(Signal)
-                .filter(
-                    Signal.user_id == user_id,
-                    Signal.status.in_(["pending", "open"]),
-                )
-                .order_by(Signal.score.desc())
-                .limit(limit)
-                .all()
-            )
-
-            items = []
-
-            for signal in signals:
-                contract = None
-                if signal.option_contract_id:
-                    contract = (
-                        db.query(OptionContract)
-                        .filter(OptionContract.id == signal.option_contract_id)
-                        .first()
-                    )
-
-                raw_score = float(signal.score or 0.0)
-                display_score = raw_score * 100.0 if raw_score <= 1.0 else raw_score
-
-                raw_probability = signal.probability_estimate
-                if raw_probability is None:
-                    probability = raw_score if raw_score <= 1.0 else raw_score / 100.0
-                else:
-                    probability = float(raw_probability)
-                    if probability > 1.0:
-                        probability = probability / 100.0
-
-                breakdown = None
-                if signal.breakdown:
-                    try:
-                        breakdown = json.loads(signal.breakdown)
-                    except Exception:
-                        breakdown = {"raw": signal.breakdown}
-
-                items.append(
-                    OpportunityItem(
-                        signal_id=signal.id,
-                        symbol=signal.symbol or (contract.symbol if contract else "UNKNOWN"),
-                        strategy_type=signal.strategy_type,
-                        score=round(display_score, 2),
-                        expected_profit=float(signal.expected_profit or 0.0),
-                        max_loss=float(signal.max_loss or 0.0),
-                        probability_estimate=round(probability, 4),
-                        reason=signal.reason or "No reason provided",
-                        status=signal.status,
-                        created_at=signal.created_at,
-                        breakdown=breakdown,
-                    )
-                )
-
-            return items
-
-        except Exception as e:
-            logger.error(
-                f"Error getting top opportunities for user {user_id}: {e}",
-                exc_info=True,
-            )
-            return []
-
-    def get_open_trades(
-        self,
-        user_id: int,
-        db: Session,
-    ) -> List[TradeItem]:
-        """Get open trades for user.
-
-        Args:
-            user_id: User ID
-            db: Database session
-
-        Returns:
-            List of TradeItem objects
-        """
-        try:
-            trades = db.query(Trade).filter(
-                Trade.user_id == user_id,
-                Trade.status == "open",
-            ).all()
-            
-            items = []
-            for trade in trades:
-                signal = None
-                contract = None
-
-                if getattr(trade, "signal_id", None):
-                    signal = (
-                        db.query(Signal)
-                        .filter(Signal.id == trade.signal_id)
-                        .first()
-                    )
-
-                if getattr(trade, "option_contract_id", None):
-                    contract = (
-                        db.query(OptionContract)
-                        .filter(OptionContract.id == trade.option_contract_id)
-                        .first()
-                    )
-
-                if signal and getattr(signal, "symbol", None):
-                    symbol = signal.symbol
-                elif contract and getattr(contract, "symbol", None):
-                    symbol = contract.symbol
-                else:
-                    symbol = "UNKNOWN"
-
-                strategy_type = (
-                    signal.strategy_type
-                    if signal and getattr(signal, "strategy_type", None)
-                    else "unknown"
-                )
-
-                entry_date = (
-                    getattr(trade, "entry_date", None)
-                    or getattr(trade, "opened_at", None)
-                    or getattr(trade, "created_at", None)
-                    or datetime.utcnow()
-                )
-
-                items.append(
-                    TradeItem(
-                        trade_id=trade.id,
-                        symbol=symbol,
-                        strategy_type=strategy_type,
-                        entry_price=float(trade.entry_price or 0.0),
-                        current_price=None,  # Would fetch from data provider
-                        quantity=int(trade.quantity or 0),
-                        entry_date=entry_date,
-                        current_pl=None,  # Would calculate later
-                        current_pl_pct=None,  # Would calculate later
-                        status=trade.status,
-                    )
-                )
-            
-            return items
-        except Exception as e:
-            logger.error(f"Error getting open trades for user {user_id}: {e}", exc_info=True)
-            return []
-
-    def get_recent_news(
-        self,
-        user_id: int,
-        db: Session,
-        limit: int = 10,
-    ) -> List[NewsItem]:
-        """Get recent news for user's watchlist symbols.
-
-        Args:
-            user_id: User ID
-            db: Database session
-            limit: Maximum number of articles
-
-        Returns:
-            List of NewsItem objects
-        """
-        try:
-            # Get watchlist symbols
-            watchlist_symbols = db.query(WatchlistSymbol).join(Watchlist).filter(
-                Watchlist.user_id == user_id,
-            ).all()
-            
-            symbols = [ws.symbol for ws in watchlist_symbols]
-            
-            if not symbols:
-                return []
-            
-            # Get recent news for those symbols
-            articles = db.query(NewsArticle).filter(
-                NewsArticle.symbol.in_(symbols),
-            ).order_by(NewsArticle.published_at.desc()).limit(limit).all()
-            
-            items = []
-            for article in articles:
-                items.append(
-                    NewsItem(
-                        article_id=article.id,
-                        symbol=article.symbol,
-                        title=article.title,
-                        description=article.description,
-                        url=article.url,
-                        source=article.source,
-                        published_at=article.published_at,
-                        sentiment=article.sentiment,
-                        sentiment_score=article.sentiment_score,
-                        event_type=article.event_type,
-                    )
-                )
-            
-            return items
-        except Exception as e:
-            logger.error(f"Error getting recent news for user {user_id}: {e}", exc_info=True)
-            return []
-
-    def get_risk_settings(
-        self,
-        user_id: int,
-        db: Session,
-    ) -> RiskSettings:
-        """Get user risk settings.
-
-        Args:
-            user_id: User ID
-            db: Database session
-
-        Returns:
-            RiskSettings object
-        """
-        try:
-            user = db.query(User).filter(User.id == user_id).first()
-            if not user:
-                logger.warning(f"User {user_id} not found")
-                return RiskSettings(
-                    risk_level="medium",
-                    paper_trading_enabled=True,
-                    live_trading_enabled=False,
-                    live_trading_approved=False,
-                    risk_levels_info=list(self.RISK_LEVEL_CONFIGS.values()),
-                )
-            
-            return RiskSettings(
-                risk_level=user.risk_level or "medium",
-                paper_trading_enabled=user.paper_trading_enabled,
-                live_trading_enabled=user.live_trading_enabled,
-                live_trading_approved=user.live_trading_approved,
-                risk_levels_info=list(self.RISK_LEVEL_CONFIGS.values()),
-            )
-        except Exception as e:
-            logger.error(f"Error getting risk settings for user {user_id}: {e}", exc_info=True)
-            return RiskSettings(
-                risk_level="medium",
-                paper_trading_enabled=True,
-                live_trading_enabled=False,
-                live_trading_approved=False,
-                risk_levels_info=list(self.RISK_LEVEL_CONFIGS.values()),
-            )
-
-    def get_dashboard_data(
-        self,
-        user_id: int,
-        db: Session,
-        watchlist_id: Optional[int] = None,
-    ) -> DashboardData:
-        """Get complete dashboard data for user.
-
-        Args:
-            user_id: User ID
-            db: Database session
-            watchlist_id: Optional specific watchlist ID
-
-        Returns:
-            DashboardData with all sections
-        """
-        try:
-            return DashboardData(
-                portfolio_summary=self.get_portfolio_summary(user_id, db),
-                watchlist=self.get_watchlist(user_id, db, watchlist_id),
-                top_opportunities=self.get_top_opportunities(user_id, db, limit=5),
-                open_trades=self.get_open_trades(user_id, db),
-                recent_news=self.get_recent_news(user_id, db, limit=5),
-                risk_settings=self.get_risk_settings(user_id, db),
-                timestamp=datetime.utcnow(),
-            )
-        except Exception as e:
-            logger.error(f"Error getting dashboard data for user {user_id}: {e}", exc_info=True)
-            # Return empty dashboard on error
-            return DashboardData(
-                portfolio_summary=PortfolioSummary(
-                    total_value=0.0,
-                    cash=0.0,
-                    positions_value=0.0,
-                    open_pl=0.0,
-                    open_pl_pct=0.0,
-                    num_open_trades=0,
-                    num_open_signals=0,
-                ),
-                watchlist=[],
-                top_opportunities=[],
-                open_trades=[],
-                recent_news=[],
-                risk_settings=self.get_risk_settings(user_id, db),
-                timestamp=datetime.utcnow(),
-            )
-
-    def update_risk_level(
-        self,
-        user_id: int,
-        risk_level: str,
-        db,
-        confirmed: bool = False,
-    ) -> dict:
-        """Update a user's risk level."""
-        from app.models.database import User
-
-        normalized_risk_level = (risk_level or "").strip().lower()
-        valid_risk_levels = {"low", "medium", "high"}
-
-        if normalized_risk_level not in valid_risk_levels:
-            return {
-                "status": "error",
-                "message": (
-                    "Invalid risk level. Expected one of: "
-                    "low, medium, high"
-                ),
-            }
-
-        if normalized_risk_level == "high" and not confirmed:
-            return {
-                "status": "confirmation_required",
-                "message": "High risk level requires explicit confirmation",
-                "risk_level": normalized_risk_level,
-                "requires_confirmation": True,
-            }
-
-        user = db.query(User).filter_by(id=user_id).first()
-        if not user:
-            return {
-                "status": "error",
-                "message": f"User {user_id} not found",
-            }
-
-        user.risk_level = normalized_risk_level
-        db.commit()
-        db.refresh(user)
-
-        return {
-            "status": "success",
-            "message": f"Risk level updated to {normalized_risk_level}",
-            "risk_level": user.risk_level,
-        }
-
+if __name__ == "__main__":
+    render_dashboard()
