@@ -69,13 +69,25 @@ fi
 "$PYTHON_BIN" -m venv .venv
 . .venv/bin/activate
 
-python -m pip install -U pip setuptools wheel
+python -m pip install -q -U pip setuptools wheel
 
 if [ -f requirements.txt ]; then
-  python -m pip install -r requirements.txt
+  python -m pip install -q -r requirements.txt
 fi
 
-python -m pip install pytest
+python -m pip install -q pytest
 
 echo "[cognimoss] running pytest"
-python -m pytest -q -ra --continue-on-collection-errors
+
+TEST_LOG="${TEST_LOG:-validation-pytest.log}"
+
+set +e
+python -m pytest -q -ra --continue-on-collection-errors > "$TEST_LOG" 2>&1
+PYTEST_RC=$?
+set -e
+
+echo "[cognimoss] pytest exit code: $PYTEST_RC"
+echo "[cognimoss] showing final pytest output"
+tail -n "${VALIDATION_TAIL_LINES:-160}" "$TEST_LOG"
+
+exit "$PYTEST_RC"
