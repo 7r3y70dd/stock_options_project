@@ -688,7 +688,7 @@ async def export_trades_csv(
         
         return StreamingResponse(
             iter([output.getvalue()]),
-            media_type="text/csv; charset=utf-8",
+            media_type="text/csv",
             headers={
                 "Content-Disposition": f'attachment; filename="{filename}"'
             }
