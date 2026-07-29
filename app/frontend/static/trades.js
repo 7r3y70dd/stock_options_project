@@ -3,6 +3,7 @@
 let currentUserId = 1;
 let tradesData = [];
 let currentTradeForClose = null;
+let currentStatusFilter = null;
 
 function el(id) {
   return document.getElementById(id);
@@ -26,6 +27,13 @@ document.addEventListener('DOMContentLoaded', function() {
     refreshBtn.addEventListener('click', refreshTrades);
   } else {
     console.error('[trades.js] Missing #refresh-btn');
+  }
+
+  const exportBtn = el('export-csv-btn');
+  if (exportBtn) {
+    exportBtn.addEventListener('click', exportTradesCSV);
+  } else {
+    console.error('[trades.js] Missing #export-csv-btn');
   }
 
   loadTrades();
@@ -97,6 +105,23 @@ async function loadTrades() {
     hideLoadingState();
     showErrorState(extractErrorMessage(error));
   }
+}
+
+function exportTradesCSV() {
+  console.log('[trades.js] exporting trades CSV for user', currentUserId);
+
+  // Build export URL with optional status filter
+  let exportUrl = `/api/api/dashboard/trades/export?user_id=${currentUserId}`;
+  
+  // Preserve current status filter if available
+  if (currentStatusFilter) {
+    exportUrl += `&status=${encodeURIComponent(currentStatusFilter)}`;
+  }
+
+  console.log('[trades.js] export URL', exportUrl);
+
+  // Trigger download by navigating to the export endpoint
+  window.location.href = exportUrl;
 }
 
 function renderTrades() {
