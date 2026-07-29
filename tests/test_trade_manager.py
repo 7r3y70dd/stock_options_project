@@ -276,7 +276,7 @@ def clone_option_contract(
     source: OptionContract,
     *,
     symbol: str,
-    option_type: str,
+    contract_type: str,
 ) -> OptionContract:
     """Create a test contract based on an existing fixture."""
 
@@ -288,7 +288,7 @@ def clone_option_contract(
 
     values.update(
         symbol=symbol,
-        option_type=option_type,
+        contract_type=contract_type,
     )
 
     contract = OptionContract(**values)
@@ -557,7 +557,7 @@ def test_csv_export_status_filter_closed(
             db_session,
             test_option_contract,
             symbol="MSFT",
-            option_type="put",
+            contract_type="put",
         )
 
         signal1 = Signal(
@@ -581,7 +581,7 @@ def test_csv_export_status_filter_closed(
             strategy_type="cash_secured_put",
             risk_level="medium",
             score=80.0,
-            expected_profit=400.0,
+            expected_profit=400.0,  
             max_loss=450.0,
             probability_estimate=0.65,
             reason="Test closed trade",
