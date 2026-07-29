@@ -40,8 +40,14 @@ app.include_router(dashboard.router, prefix="/api", tags=["dashboard"])
 
 @app.get("/", response_class=HTMLResponse)
 async def root(request: Request):
-    """Root endpoint redirects to dashboard."""
-    return templates.TemplateResponse("dashboard.html", {"request": request})
+    """Root endpoint redirects to login."""
+    return templates.TemplateResponse("login.html", {"request": request})
+
+
+@app.get("/login", response_class=HTMLResponse)
+async def login_page(request: Request):
+    """Login page."""
+    return templates.TemplateResponse("login.html", {"request": request})
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
@@ -82,12 +88,11 @@ async def risk_settings_page(request: Request):
     return templates.TemplateResponse("risk_settings.html", {"request": request})
 
 
-
-
 @app.get("/trades", response_class=HTMLResponse)
 async def trades_page(request: Request):
     """Render trades page."""
     return templates.TemplateResponse("trades.html", {"request": request})
+
 
 @app.get("/news", response_class=HTMLResponse)
 async def news_page(request: Request):
@@ -99,6 +104,7 @@ async def news_page(request: Request):
 async def status_page(request: Request):
     """System status page."""
     return templates.TemplateResponse("status.html", {"request": request})
+
 
 @app.get("/api/api/dashboard/risk-settings")
 async def dashboard_risk_settings(user_id: int = 1):
@@ -188,6 +194,7 @@ async def update_dashboard_risk_settings(
         return {"success": False, "error": str(exc)}
     finally:
         db.close()
+
 
 @app.get("/api/api/dashboard/trades/open-marked")
 async def get_open_trades_marked(user_id: int = 1):
@@ -316,6 +323,7 @@ async def get_open_trades_marked(user_id: int = 1):
     finally:
         db.close()
 
+
 # --- dev workflow router/pages ---
 from fastapi import Request as _DevRequest
 from fastapi.responses import HTMLResponse as _DevHTMLResponse
@@ -330,12 +338,14 @@ except Exception as exc:
 
 _dev_templates = _DevJinja2Templates(directory="app/frontend/templates")
 
+
 @app.get("/trades/{trade_id}", response_class=_DevHTMLResponse)
 async def trade_detail_page(request: _DevRequest, trade_id: int):
     return _dev_templates.TemplateResponse(
         "trade_detail.html",
         {"request": request, "trade_id": trade_id},
     )
+
 
 @app.get("/backtests", response_class=_DevHTMLResponse)
 async def backtests_page(request: _DevRequest):

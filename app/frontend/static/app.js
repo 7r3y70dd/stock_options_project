@@ -8,6 +8,22 @@ const DASHBOARD_PREFIX = '/api/dashboard';
 const DEFAULT_USER_ID = 1;
 
 /**
+ * Check if user is authenticated.
+ * @returns {boolean} True if authenticated
+ */
+function isAuthenticated() {
+    return localStorage.getItem('sessionToken') !== null;
+}
+
+/**
+ * Get the session token.
+ * @returns {string|null} The session token or null
+ */
+function getSessionToken() {
+    return localStorage.getItem('sessionToken');
+}
+
+/**
  * Get the current user ID from localStorage or use default.
  * @returns {number} The user ID
  */
@@ -22,6 +38,77 @@ function getUserId() {
  */
 function setUserId(userId) {
     localStorage.setItem('userId', String(userId));
+}
+
+/**
+ * Get the current username from localStorage.
+ * @returns {string|null} The username or null
+ */
+function getUsername() {
+    return localStorage.getItem('username');
+}
+
+/**
+ * Logout user and redirect to login page.
+ */
+async function logout() {
+    const token = getSessionToken();
+    
+    if (token) {
+        try {
+            await fetch(`${DASHBOARD_PREFIX}/auth/logout`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ token }),
+            });
+        } catch (error) {
+            console.error('Logout error:', error);
+        }
+    }
+    
+    // Clear local storage
+    localStorage.removeItem('sessionToken');
+    localStorage.removeItem('userId');
+    localStorage.removeItem('username');
+    localStorage.removeItem('userEmail');
+    
+    // Redirect to login
+    window.location.href = '/login';
+}
+
+/**
+ * Verify session is valid, redirect to login if not.
+ */
+async function verifySession() {
+    const token = getSessionToken();
+    
+    if (!token) {
+        window.location.href = '/login';
+        return false;
+    }
+    
+    try {
+        const response = await fetch(`${DASHBOARD_PREFIX}/auth/verify?token=${encodeURIComponent(token)}`);
+        
+        if (!response.ok) {
+            // Session invalid, redirect to login
+            localStorage.removeItem('sessionToken');
+            localStorage.removeItem('userId');
+            localStorage.removeItem('username');
+            localStorage.removeItem('userEmail');
+            window.location.href = '/login';
+            return false;
+        }
+        
+        return true;
+    } catch (error) {
+        console.error('Session verification error:', error);
+        // On network error, allow access but show warning
+        showError('Unable to verify session. Some features may not work.');
+        return true;
+    }
 }
 
 /**
@@ -190,10 +277,44 @@ function updateFooterStatus(timestamp = null) {
 }
 
 /**
+ * Update the username display in the header.
+ */
+function updateUsernameDisplay() {
+    const username = getUsername();
+    const usernameEl = document.getElementById('username-display');
+    if (usernameEl && username) {
+        usernameEl.textContent = username;
+    }
+}
+
+/**
  * Initialize the app on page load.
- * Checks API health and sets up event listeners.
+ * Checks authentication and API health.
  */
 async function initializeApp() {
+    // Skip auth check on login page
+    if (window.location.pathname === '/login') {
+        return;
+    }
+    
+    // Verify session
+    const isValid = await verifySession();
+    if (!isValid) {
+        return;
+    }
+    
+    // Update username display
+    updateUsernameDisplay();
+    
+    // Setup logout button
+    const logoutBtn = document.getElementById('logout-button');
+    if (logoutBtn) {
+        logoutBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            logout();
+        });
+    }
+    
     try {
         // Check API health
         const health = await apiRequest('/health');
