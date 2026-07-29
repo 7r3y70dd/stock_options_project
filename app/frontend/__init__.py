@@ -4,6 +4,7 @@ from fastapi import APIRouter
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.requests import Request
 from pathlib import Path
 import os
 
@@ -16,22 +17,28 @@ static_dir = Path(__file__).parent / "static"
 templates = Jinja2Templates(directory=str(template_dir))
 
 
+@router.get("/login", response_class=HTMLResponse)
+async def login_page(request: Request):
+    """Render login page."""
+    return templates.TemplateResponse("login.html", {"request": request})
+
+
 @router.get("/dashboard", response_class=HTMLResponse)
-async def dashboard():
+async def dashboard(request: Request):
     """Render dashboard page."""
-    return templates.get_template("dashboard.html").render()
+    return templates.TemplateResponse("dashboard.html", {"request": request})
 
 
 @router.get("/opportunities", response_class=HTMLResponse)
-async def opportunities():
+async def opportunities(request: Request):
     """Render opportunities list page."""
-    return templates.get_template("opportunities.html").render()
+    return templates.TemplateResponse("opportunities.html", {"request": request})
 
 
 @router.get("/opportunities/{signal_id}", response_class=HTMLResponse)
-async def opportunity_detail(signal_id: int):
+async def opportunity_detail(request: Request, signal_id: int):
     """Render opportunity detail page."""
-    return templates.get_template("opportunity_detail.html").render(signal_id=signal_id)
+    return templates.TemplateResponse("opportunity_detail.html", {"request": request, "signal_id": signal_id})
 
 
 def setup_frontend(app):
