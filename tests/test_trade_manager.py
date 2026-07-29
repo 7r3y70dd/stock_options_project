@@ -270,6 +270,34 @@ def test_open_trade_count_endpoint(
         app.dependency_overrides.clear()
 
 
+
+def clone_option_contract(
+    db_session: Session,
+    source: OptionContract,
+    *,
+    symbol: str,
+    option_type: str,
+) -> OptionContract:
+    """Create a test contract based on an existing fixture."""
+
+    values = {
+        column.name: getattr(source, column.name)
+        for column in OptionContract.__table__.columns
+        if not column.primary_key
+    }
+
+    values.update(
+        symbol=symbol,
+        option_type=option_type,
+    )
+
+    contract = OptionContract(**values)
+    db_session.add(contract)
+    db_session.commit()
+    db_session.refresh(contract)
+
+    return contract
+
 def test_csv_export_endpoint_returns_csv(
     client: TestClient,
     db_session: Session,
@@ -514,17 +542,24 @@ def test_csv_export_status_filter_closed(
     test_user: User,
     test_option_contract: OptionContract,
 ):
-    """Test that status=closed filter excludes open trades."""
+    """Test that status=closed returns only closed trades."""
+
     def override_get_db():
         try:
             yield db_session
         finally:
             pass
-    
+
     app.dependency_overrides[get_db] = override_get_db
-    
+
     try:
-        # Create two signals with allowed strategies
+        msft_contract = clone_option_contract(
+            db_session,
+            test_option_contract,
+            symbol="MSFT",
+            option_type="put",
+        )
+
         signal1 = Signal(
             user_id=test_user.id,
             symbol="AAPL",
@@ -534,11 +569,12 @@ def test_csv_export_status_filter_closed(
             expected_profit=500.0,
             max_loss=550.0,
             probability_estimate=0.7,
-            reason="Test",
+            reason="Test open trade",
             status="pending",
             option_contract_id=test_option_contract.id,
             exit_rules="[]",
         )
+
         signal2 = Signal(
             user_id=test_user.id,
             symbol="MSFT",
@@ -548,48 +584,57 @@ def test_csv_export_status_filter_closed(
             expected_profit=400.0,
             max_loss=450.0,
             probability_estimate=0.65,
-            reason="Test",
+            reason="Test closed trade",
             status="pending",
-            option_contract_id=test_option_contract.id,
+            option_contract_id=msft_contract.id,
             exit_rules="[]",
         )
+
         db_session.add_all([signal1, signal2])
         db_session.commit()
-        
-        # Create two trades
+        db_session.refresh(signal1)
+        db_session.refresh(signal2)
+
         trade_manager = TradeManager()
-        trade1 = trade_manager.approve_signal_as_paper_trade(
+
+        trade_manager.approve_signal_as_paper_trade(
             user_id=test_user.id,
             signal_id=signal1.id,
             db=db_session,
             quantity=1,
         )
-        trade2 = trade_manager.approve_signal_as_paper_trade(
+
+        closed_trade = trade_manager.approve_signal_as_paper_trade(
             user_id=test_user.id,
             signal_id=signal2.id,
             db=db_session,
             quantity=1,
         )
-        
-        # Close trade2
+
         trade_manager.close_trade(
             user_id=test_user.id,
-            trade_id=trade2.id,
+            trade_id=closed_trade.id,
             db=db_session,
             exit_price=6.0,
         )
-        
-        # Export with status=closed filter
-        response = client.get(f"/api/api/dashboard/trades/export?user_id={test_user.id}&status=closed")
-        
+
+        response = client.get(
+            f"/api/api/dashboard/trades/export"
+            f"?user_id={test_user.id}&status=closed"
+        )
+
         assert response.status_code == 200
-        csv_content = response.text
-        lines = csv_content.strip().split("\n")
-        
-        # Should have header + 1 closed trade
-        assert len(lines) == 2
-        assert "MSFT" in csv_content
-        assert "AAPL" not in csv_content
+
+        import csv
+        import io
+
+        rows = list(csv.DictReader(io.StringIO(response.text)))
+
+        assert len(rows) == 1
+        assert rows[0]["Symbol"] == "MSFT"
+        assert rows[0]["Strategy"] == "cash_secured_put"
+        assert rows[0]["Status"] == "closed"
+
     finally:
         app.dependency_overrides.clear()
 
